@@ -7,7 +7,7 @@
     "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:frontend\"",
     "dev:api": "tsx watch api/server.ts",
     "dev:frontend": "npm --workspace frontend run dev",
-    "build": "npm --workspace frontend run build",
+    "build": "npm --workspace frontend run build && rm -rf dist && mkdir -p dist && cp -r frontend/dist/. dist/",
     "start": "tsx api/server.ts",
     "generate:key": "node scripts/generate-key.js"
   },
