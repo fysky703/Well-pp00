@@ -2,14 +2,17 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { Pool } from 'pg';
-import crypto from 'crypto';
-import { OAuth2Client } from 'google-auth-library';
 
-export const app = express();
-
-const pool = new Pool({
+export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  max: 10,
+  idleTimeoutMillis: 30000
+});
+
+// ចាប់ Error ការពារ Serverless កុំឱ្យ Crash
+pool.on('error', (err) => {
+  console.error('Unexpected error on idle PostgreSQL client', err);
 });
 
 const googleClient = new OAuth2Client(
