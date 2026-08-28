@@ -274,7 +274,7 @@ async function decryptVault(ciphertextBase64: string, ivBase64: string, pin: str
 }
 
 // ============================================================================
-// 3. 🎨 ACCESSIBLE SVG ICONS (Clean & Modern)
+// 3. 🎨 ACCESSIBLE SVG ICONS
 // ============================================================================
 const IconShield = ({ size = 24 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -393,10 +393,7 @@ interface AuthenticatorItem {
 }
 
 function MainApp() {
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    return (localStorage.getItem('ocean_theme') as 'dark' | 'light') || 'dark';
-  });
-
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [user, setUser] = useState<any>(null);
   const [hasVault, setHasVault] = useState<boolean>(false);
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
@@ -448,7 +445,6 @@ function MainApp() {
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
-    localStorage.setItem('ocean_theme', next);
   };
 
   const generateRecoveryCodes = () => {
@@ -749,8 +745,8 @@ function MainApp() {
             <div
               key={i}
               style={{
-                width: 46,
-                height: 54,
+                width: 44,
+                height: 52,
                 borderRadius: 14,
                 background: isFilled
                   ? 'rgba(103,245,232,0.12)'
@@ -770,7 +766,7 @@ function MainApp() {
               }}
             >
               {isFilled ? (
-                <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#67F5E8' }} />
+                <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#67F5E8' }} />
               ) : isCurrent ? (
                 <div style={{ width: 16, height: 2, borderRadius: 1, background: '#67F5E8' }} />
               ) : null}
@@ -782,37 +778,148 @@ function MainApp() {
   };
 
   // ============================================================================
-  // 5. 🌊 OCEAN AI CORE COLOR & GLASS SYSTEM
+  // 5. 🌊 OCEAN AI CORE STYLES (Zero-Margin, Locked Viewport, Full Width)
   // ============================================================================
   const isDark = theme === 'dark';
   const C = {
-    bg: isDark
-      ? 'radial-gradient(circle at 10% 10%, rgba(67,245,232,.08), transparent 30%), radial-gradient(circle at 90% 20%, rgba(255,105,145,.04), transparent 25%), #02090D'
-      : 'radial-gradient(circle at 10% 10%, rgba(22,189,178,.08), transparent 30%), #F1FAF9',
-    surface: isDark ? 'rgba(8, 24, 30, 0.75)' : 'rgba(255, 255, 255, 0.85)',
-    surfaceCard: isDark ? 'rgba(7, 21, 27, 0.8)' : 'rgba(255, 255, 255, 0.95)',
+    bg: '#02090D',
+    surface: isDark ? 'rgba(8, 24, 30, 0.85)' : 'rgba(255, 255, 255, 0.92)',
+    surfaceCard: isDark ? '#07151B' : '#FFFFFF',
     border: isDark ? 'rgba(103,245,232,0.18)' : 'rgba(20,150,145,0.22)',
-    borderActive: isDark ? 'rgba(103,245,232,0.45)' : 'rgba(20,150,145,0.5)',
     textPrimary: isDark ? '#F3FAFA' : '#102326',
     textSecondary: isDark ? '#9AAAB2' : '#60777A',
     accent: isDark ? '#67F5E8' : '#16BDB2',
-    accentGrad: 'linear-gradient(135deg, #111 0%, #333 100%)',
     btnGradientBlackWhite: 'linear-gradient(135deg, #ffffff 0%, #d8d8d8 100%)',
     btnTextDark: '#000000'
   };
 
   const S = {
-    app: { minHeight: '100vh', background: C.bg, color: C.textPrimary, fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, sans-serif', paddingBottom: 90 },
-    center: { display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', padding: 20, background: C.bg },
-    glassCard: { background: C.surface, backdropFilter: 'blur(24px) saturate(135%)', WebkitBackdropFilter: 'blur(24px) saturate(135%)', border: `1px solid ${C.border}`, borderRadius: 24, padding: 32, maxWidth: 390, width: '100%', textAlign: 'center' as const, boxShadow: '0 20px 60px rgba(0,0,0,.35)' },
-    btnGradBW: { width: '100%', padding: '14px 20px', background: C.btnGradientBlackWhite, color: C.btnTextDark, fontWeight: 700, borderRadius: 16, border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, transition: 'all 180ms ease' },
-    btnGlassSecondary: { width: '100%', padding: '12px 18px', background: 'rgba(255,255,255,0.06)', color: C.textPrimary, fontWeight: 600, borderRadius: 16, border: `1px solid ${C.border}`, cursor: 'pointer', fontSize: 15 },
-    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: C.surface, backdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}`, position: 'sticky' as const, top: 0, zIndex: 100 },
-    card: { background: C.surfaceCard, backdropFilter: 'blur(20px)', border: `1px solid ${C.border}`, borderRadius: 20, padding: 20, marginBottom: 16, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' },
-    totpDigits: { fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 38, fontWeight: 700, letterSpacing: 6, color: C.accent },
-    timerBadge: { background: isDark ? 'rgba(103,245,232,0.1)' : 'rgba(22,189,178,0.15)', color: C.accent, width: 44, height: 44, borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: 14, fontWeight: 700, border: `1.5px solid ${C.border}` },
-    input: { width: '100%', padding: '14px 16px', background: isDark ? '#07151B' : '#FFFFFF', border: `1px solid ${C.border}`, borderRadius: 14, color: C.textPrimary, fontSize: 15, boxSizing: 'border-box' as const, outline: 'none' },
-    label: { display: 'block', fontSize: 13, color: C.textSecondary, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: 0.5 }
+    app: {
+      width: '100%',
+      minHeight: '100vh',
+      maxWidth: '100vw',
+      backgroundColor: C.bg,
+      color: C.textPrimary,
+      fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, sans-serif',
+      paddingBottom: 96,
+      boxSizing: 'border-box' as const,
+      overflowX: 'hidden' as const,
+      margin: 0
+    },
+    center: {
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      width: '100%',
+      minHeight: '100vh',
+      padding: '16px',
+      backgroundColor: C.bg,
+      boxSizing: 'border-box' as const
+    },
+    glassCard: {
+      background: C.surface,
+      backdropFilter: 'blur(24px) saturate(135%)',
+      WebkitBackdropFilter: 'blur(24px) saturate(135%)',
+      border: `1px solid ${C.border}`,
+      borderRadius: 24,
+      padding: '28px 20px',
+      maxWidth: 390,
+      width: '100%',
+      textAlign: 'center' as const,
+      boxShadow: '0 20px 60px rgba(0,0,0,.5)',
+      boxSizing: 'border-box' as const
+    },
+    btnGradBW: {
+      width: '100%',
+      padding: '14px 20px',
+      background: C.btnGradientBlackWhite,
+      color: C.btnTextDark,
+      fontWeight: 700,
+      borderRadius: 16,
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: 16,
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 8,
+      boxSizing: 'border-box' as const
+    },
+    btnGlassSecondary: {
+      width: '100%',
+      padding: '12px 18px',
+      background: 'rgba(255,255,255,0.06)',
+      color: C.textPrimary,
+      fontWeight: 600,
+      borderRadius: 16,
+      border: `1px solid ${C.border}`,
+      cursor: 'pointer',
+      fontSize: 15,
+      boxSizing: 'border-box' as const
+    },
+    header: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '14px 16px',
+      background: C.surface,
+      backdropFilter: 'blur(20px)',
+      borderBottom: `1px solid ${C.border}`,
+      position: 'sticky' as const,
+      top: 0,
+      zIndex: 100,
+      width: '100%',
+      boxSizing: 'border-box' as const
+    },
+    card: {
+      background: C.surfaceCard,
+      border: `1px solid ${C.border}`,
+      borderRadius: 22,
+      padding: 18,
+      marginBottom: 16,
+      boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+      boxSizing: 'border-box' as const
+    },
+    totpDigits: {
+      fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+      fontSize: 'clamp(28px, 8vw, 36px)',
+      fontWeight: 700,
+      letterSpacing: 4,
+      color: C.accent
+    },
+    timerBadge: {
+      background: 'rgba(103,245,232,0.12)',
+      color: C.accent,
+      width: 42,
+      height: 42,
+      borderRadius: '50%',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      fontSize: 13,
+      fontWeight: 700,
+      border: `1.5px solid ${C.border}`
+    },
+    input: {
+      width: '100%',
+      padding: '14px 16px',
+      background: isDark ? '#02090D' : '#FFFFFF',
+      border: `1px solid ${C.border}`,
+      borderRadius: 14,
+      color: C.textPrimary,
+      fontSize: 15,
+      boxSizing: 'border-box' as const,
+      outline: 'none'
+    },
+    label: {
+      display: 'block',
+      fontSize: 13,
+      color: C.textSecondary,
+      marginBottom: 8,
+      fontWeight: 600,
+      textTransform: 'uppercase' as const,
+      letterSpacing: 0.5
+    }
   };
 
   if (loading) {
@@ -931,43 +1038,43 @@ function MainApp() {
     <div style={S.app}>
       {/* Header */}
       <header style={S.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <img src={user.avatarUrl || 'https://via.placeholder.com/40'} alt="Avatar" style={{ width: 42, height: 42, borderRadius: '50%', border: `1.5px solid ${C.border}` }} />
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 15, color: C.textPrimary }}>{user.name}</div>
-            <div style={{ color: C.textSecondary, fontSize: 12 }}>{user.email}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <img src={user.avatarUrl || 'https://via.placeholder.com/40'} alt="Avatar" style={{ width: 40, height: 40, borderRadius: '50%', border: `1.5px solid ${C.border}`, flexShrink: 0 }} />
+          <div style={{ minWidth: 0, overflow: 'hidden' }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.name}</div>
+            <div style={{ color: C.textSecondary, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.email}</div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
           <button
             onClick={toggleTheme}
-            style={{ background: 'rgba(255,255,255,0.06)', border: `1px solid ${C.border}`, color: C.textPrimary, width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            style={{ background: 'rgba(255,255,255,0.06)', border: `1px solid ${C.border}`, color: C.textPrimary, width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
             title="Toggle Theme"
           >
-            {isDark ? <IconSun size={18} /> : <IconMoon size={18} />}
+            {isDark ? <IconSun size={17} /> : <IconMoon size={17} />}
           </button>
           <button
             onClick={() => setIsUnlocked(false)}
-            style={{ background: 'rgba(255,255,255,0.06)', border: `1px solid ${C.border}`, color: C.textPrimary, width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            style={{ background: 'rgba(255,255,255,0.06)', border: `1px solid ${C.border}`, color: C.textPrimary, width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
             title="Lock Vault"
           >
-            <IconLock size={18} />
+            <IconLock size={17} />
           </button>
           <button
             onClick={() => setShowAddSheet(true)}
-            style={{ background: C.btnGradientBlackWhite, border: 'none', color: '#000', padding: '8px 18px', borderRadius: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+            style={{ background: C.btnGradientBlackWhite, border: 'none', color: '#000', padding: '8px 14px', borderRadius: 18, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 14 }}
           >
-            <IconPlus size={16} /> Add
+            <IconPlus size={15} /> Add
           </button>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <main style={{ maxWidth: 540, margin: '0 auto', padding: '20px 16px' }}>
+      <main style={{ width: '100%', maxWidth: 540, margin: '0 auto', padding: '16px', boxSizing: 'border-box' }}>
         {activeTab === 'vault' && (
           <div>
             {accounts.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 20px', background: C.surface, borderRadius: 24, border: `1px solid ${C.border}` }}>
+              <div style={{ textAlign: 'center', padding: '50px 16px', background: C.surface, borderRadius: 24, border: `1px solid ${C.border}` }}>
                 <div style={{ color: C.accent, marginBottom: 16 }}><IconShield size={48} /></div>
                 <h3 style={{ margin: '0 0 8px 0' }}>No Authenticator Accounts</h3>
                 <p style={{ color: C.textSecondary, fontSize: 14, marginBottom: 20 }}>Scan a QR code or enter code details manually.</p>
@@ -979,17 +1086,17 @@ function MainApp() {
               <div>
                 {accounts.map((acc) => {
                   const code = totpCodes[acc.id] || '------';
-                  const formatted = `${code.slice(0, 3)} ${code.slice(3, 6)}`;
+                  const formatted = `${code.slice(0, 3)}  ${code.slice(3, 6)}`;
                   return (
                     <article key={acc.id} style={S.card}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div>
-                          <h3 style={{ margin: '0 0 4px 0', fontSize: 18, color: C.textPrimary, fontWeight: 700 }}>{acc.codeName}</h3>
+                        <div style={{ minWidth: 0, paddingRight: 8 }}>
+                          <h3 style={{ margin: '0 0 4px 0', fontSize: 17, color: C.textPrimary, fontWeight: 700, wordBreak: 'break-word' }}>{acc.codeName}</h3>
                           <span style={{ fontSize: 12, color: C.textSecondary }}>{acc.keyType === 'time' ? 'Time-based (30s)' : 'Counter-based'}</span>
                         </div>
                         <button
                           onClick={() => handleDelete(acc.id)}
-                          style={{ background: 'transparent', border: 'none', color: '#FF6F8D', cursor: 'pointer', padding: 4 }}
+                          style={{ background: 'transparent', border: 'none', color: '#FF6F8D', cursor: 'pointer', padding: 4, flexShrink: 0 }}
                           title="Delete"
                         >
                           <IconTrash size={18} />
@@ -998,7 +1105,7 @@ function MainApp() {
 
                       <div
                         onClick={() => copyCode(acc.id, code)}
-                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0', cursor: 'pointer' }}
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '16px 0', cursor: 'pointer' }}
                       >
                         <span style={S.totpDigits}>{formatted}</span>
                         <div style={S.timerBadge}>{timeLeft}s</div>
@@ -1037,9 +1144,9 @@ function MainApp() {
             <h3 style={{ margin: '0 0 16px 0', fontSize: 18, fontWeight: 700 }}>Active Sessions ({sessions.length})</h3>
             {sessions.map((s) => (
               <div key={s.id} style={{ ...S.card, display: 'flex', alignItems: 'center', gap: 14 }}>
-                <div style={{ color: C.accent }}>{s.device_type === 'phone' ? <IconPhone size={26} /> : <IconComputer size={26} />}</div>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>{s.device_name} {s.is_current_device && <span style={{ background: C.accent, color: '#000', fontSize: 10, padding: '2px 6px', borderRadius: 6, marginLeft: 6, fontWeight: 800 }}>Current</span>}</div>
+                <div style={{ color: C.accent }}>{s.device_type === 'phone' ? <IconPhone size={24} /> : <IconComputer size={24} />}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, wordBreak: 'break-word' }}>{s.device_name} {s.is_current_device && <span style={{ background: C.accent, color: '#000', fontSize: 10, padding: '2px 6px', borderRadius: 6, marginLeft: 6, fontWeight: 800 }}>Current</span>}</div>
                   <div style={{ color: C.textSecondary, fontSize: 12 }}>{s.browser} • {s.operating_system}</div>
                 </div>
               </div>
@@ -1057,7 +1164,7 @@ function MainApp() {
                   <div style={{ color: C.textSecondary, fontSize: 12 }}>Generate single-use backup emergency keys</div>
                 </div>
                 <button
-                  style={{ ...S.btnGradBW, width: 'auto', padding: '8px 16px', fontSize: 14 }}
+                  style={{ ...S.btnGradBW, width: 'auto', padding: '8px 16px', fontSize: 13 }}
                   onClick={() => {
                     generateRecoveryCodes();
                     setShowRecoveryModal(true);
@@ -1085,46 +1192,46 @@ function MainApp() {
       <nav
         style={{
           position: 'fixed',
-          bottom: 16,
-          left: 16,
-          right: 16,
-          maxWidth: 508,
+          bottom: 12,
+          left: 12,
+          right: 12,
+          maxWidth: 480,
           margin: '0 auto',
-          height: 68,
+          height: 64,
           background: C.surface,
           backdropFilter: 'blur(28px)',
           WebkitBackdropFilter: 'blur(28px)',
           border: `1px solid ${C.border}`,
-          borderRadius: 24,
+          borderRadius: 22,
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
           alignItems: 'center',
           zIndex: 10000,
-          boxShadow: '0 12px 40px rgba(0,0,0,0.4)'
+          boxShadow: '0 12px 40px rgba(0,0,0,0.6)'
         }}
       >
         <button
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'vault' ? C.accent : C.textSecondary, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}
+          style={{ background: 'transparent', border: 'none', color: activeTab === 'vault' ? C.accent : C.textSecondary, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}
           onClick={() => setActiveTab('vault')}
         >
-          <IconShield size={22} />
+          <IconShield size={20} />
           Vault
         </button>
         <button
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'devices' ? C.accent : C.textSecondary, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}
+          style={{ background: 'transparent', border: 'none', color: activeTab === 'devices' ? C.accent : C.textSecondary, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}
           onClick={() => {
             setActiveTab('devices');
             fetchSessions();
           }}
         >
-          <IconComputer size={22} />
+          <IconComputer size={20} />
           Devices
         </button>
         <button
-          style={{ background: 'transparent', border: 'none', color: activeTab === 'settings' ? C.accent : C.textSecondary, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}
+          style={{ background: 'transparent', border: 'none', color: activeTab === 'settings' ? C.accent : C.textSecondary, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}
           onClick={() => setActiveTab('settings')}
         >
-          <IconLock size={22} />
+          <IconLock size={20} />
           Settings
         </button>
       </nav>
@@ -1133,11 +1240,11 @@ function MainApp() {
       {showAddSheet && (
         <div
           onClick={() => setShowAddSheet(false)}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 10001 }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 10001 }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ background: C.surfaceCard, width: '100%', maxWidth: 500, borderRadius: '28px 28px 0 0', padding: 24, border: `1px solid ${C.border}` }}
+            style={{ background: C.surfaceCard, width: '100%', maxWidth: 500, borderRadius: '28px 28px 0 0', padding: 24, border: `1px solid ${C.border}`, boxSizing: 'border-box' }}
           >
             <h3 style={{ margin: '0 0 18px 0', fontWeight: 700 }}>Add Authenticator</h3>
             <button
@@ -1166,13 +1273,13 @@ function MainApp() {
       {showManualModal && (
         <div
           onClick={() => setShowManualModal(false)}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: 20 }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: 16, boxSizing: 'border-box' }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ ...S.glassCard, maxWidth: 440, textAlign: 'left' }}
+            style={{ ...S.glassCard, maxWidth: 420, textAlign: 'left' }}
           >
-            <h3 style={{ margin: '0 0 20px 0', fontWeight: 700, fontSize: 20 }}>Enter code details</h3>
+            <h3 style={{ margin: '0 0 20px 0', fontWeight: 700, fontSize: 19 }}>Enter code details</h3>
             <form onSubmit={handleSaveManual}>
               <div style={{ marginBottom: 16 }}>
                 <label style={S.label}>Code name</label>
@@ -1216,15 +1323,15 @@ function MainApp() {
               </div>
 
               {previewCode && (
-                <div style={{ background: 'rgba(103,245,232,0.08)', border: `1px solid ${C.border}`, borderRadius: 14, padding: 14, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, color: C.textSecondary }}>Generated Code Preview:</span>
-                  <strong style={{ fontSize: 22, color: C.accent, fontFamily: 'monospace' }}>{previewCode}</strong>
+                <div style={{ background: 'rgba(103,245,232,0.08)', border: `1px solid ${C.border}`, borderRadius: 14, padding: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, color: C.textSecondary }}>Generated Preview:</span>
+                  <strong style={{ fontSize: 20, color: C.accent, fontFamily: 'monospace' }}>{previewCode}</strong>
                 </div>
               )}
 
               {formError && <p style={{ color: '#FF6F8D', fontSize: 13, marginBottom: 16 }}>{formError}</p>}
 
-              <div style={{ display: 'flex', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 10 }}>
                 <button type="button" style={S.btnGlassSecondary} onClick={() => setShowManualModal(false)}>Cancel</button>
                 <button type="submit" style={S.btnGradBW} disabled={!previewCode}>Add</button>
               </div>
@@ -1237,15 +1344,15 @@ function MainApp() {
       {showRecoveryModal && (
         <div
           onClick={() => setShowRecoveryModal(false)}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: 20 }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: 16, boxSizing: 'border-box' }}
         >
-          <div onClick={(e) => e.stopPropagation()} style={{ ...S.glassCard, maxWidth: 440, textAlign: 'left' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ ...S.glassCard, maxWidth: 420, textAlign: 'left' }}>
             <h3 style={{ margin: '0 0 8px 0', fontWeight: 700 }}>2FA Recovery Codes</h3>
             <p style={{ color: C.textSecondary, fontSize: 13, marginBottom: 16 }}>
               Store these single-use recovery codes in a safe place. If you lose your phone, you can use these keys to regain access.
             </p>
 
-            <div style={{ background: isDark ? '#07151B' : '#FFFFFF', border: `1px solid ${C.border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
+            <div style={{ background: '#02090D', border: `1px solid ${C.border}`, borderRadius: 16, padding: 14, marginBottom: 16 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 {recoveryCodes.map((code, idx) => (
                   <div key={idx} style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 13, color: C.textPrimary }}>
@@ -1285,9 +1392,9 @@ function MainApp() {
       {showScannerModal && (
         <div
           onClick={closeScanner}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: 20 }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10002, padding: 16, boxSizing: 'border-box' }}
         >
-          <div onClick={(e) => e.stopPropagation()} style={{ ...S.glassCard, maxWidth: 400 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ ...S.glassCard, maxWidth: 390 }}>
             <h3 style={{ margin: '0 0 16px 0', fontWeight: 700 }}>Scan QR Code</h3>
             {scannerError ? (
               <div>
@@ -1297,7 +1404,7 @@ function MainApp() {
             ) : scannedResult ? (
               <div>
                 <p>Found: <strong>{scannedResult.issuer} ({scannedResult.account})</strong></p>
-                <div style={{ margin: '16px 0', fontSize: 28, fontFamily: 'monospace', color: C.accent, fontWeight: 700 }}>{previewCode}</div>
+                <div style={{ margin: '16px 0', fontSize: 26, fontFamily: 'monospace', color: C.accent, fontWeight: 700 }}>{previewCode}</div>
                 <div style={{ display: 'flex', gap: 10 }}>
                   <button style={S.btnGlassSecondary} onClick={() => setScannedResult(null)}>Scan Again</button>
                   <button style={S.btnGradBW} onClick={handleSaveScanned}>Save</button>
@@ -1305,7 +1412,7 @@ function MainApp() {
               </div>
             ) : (
               <div>
-                <video ref={videoRef} style={{ width: '100%', height: 260, borderRadius: 16, objectFit: 'cover', background: '#000', border: `1px solid ${C.border}` }} autoPlay playsInline muted />
+                <video ref={videoRef} style={{ width: '100%', height: 250, borderRadius: 16, objectFit: 'cover', background: '#000', border: `1px solid ${C.border}` }} autoPlay playsInline muted />
                 <p style={{ color: C.textSecondary, fontSize: 13, marginTop: 12 }}>Point camera at standard 2FA QR code</p>
                 <button style={{ ...S.btnGlassSecondary, marginTop: 12 }} onClick={closeScanner}>Cancel</button>
               </div>
