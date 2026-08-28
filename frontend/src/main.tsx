@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserQRCodeReader, IScannerControls } from '@zxing/browser';
-import './styles.css';
 
 // ==========================================
-// 1. 🛡️ REAL RFC 6238 / RFC 4226 TOTP ENGINE
+// 1. 🛡️ TRUE RFC 6238 / RFC 4226 TOTP ENGINE
 // ==========================================
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -15,6 +14,7 @@ export interface ParsedOTPAuth {
   algorithm: string;
   digits: number;
   period: number;
+  type?: 'totp' | 'hotp';
 }
 
 export function isValidBase32(secret: string): boolean {
@@ -78,15 +78,10 @@ function sha1(bytes: Uint8Array): Uint8Array {
       w[t] = (val << 1) | (val >>> 31);
     }
 
-    let a = h0,
-      b = h1,
-      c = h2,
-      d = h3,
-      e = h4;
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
 
     for (let t = 0; t < 80; t++) {
-      let f = 0,
-        k = 0;
+      let f = 0, k = 0;
       if (t < 20) {
         f = (b & c) | (~b & d);
         k = K[0];
@@ -128,9 +123,7 @@ function sha1(bytes: Uint8Array): Uint8Array {
 
 function hmacSha1(key: Uint8Array, message: Uint8Array): Uint8Array {
   let formattedKey = key;
-  if (key.length > 64) {
-    formattedKey = sha1(key);
-  }
+  if (key.length > 64) formattedKey = sha1(key);
   const kPad = new Uint8Array(64);
   kPad.set(formattedKey);
 
@@ -192,10 +185,11 @@ export function getRemainingSeconds(period = 30, timestamp = Date.now()): number
 
 export function parseOTPAuthURI(uriString: string): ParsedOTPAuth | null {
   try {
-    if (!uriString.startsWith('otpauth://totp/')) return null;
+    if (!uriString.startsWith('otpauth://')) return null;
     const url = new URL(uriString);
 
-    const label = decodeURIComponent(url.pathname.replace(/^\/totp\//, '').replace(/^\//, ''));
+    const isHotp = url.pathname.startsWith('hotp/') || url.host === 'hotp';
+    const label = decodeURIComponent(url.pathname.replace(/^\/(totp|hotp)\//, '').replace(/^\//, ''));
     let issuer = url.searchParams.get('issuer') || '';
     let account = label;
 
@@ -208,17 +202,17 @@ export function parseOTPAuthURI(uriString: string): ParsedOTPAuth | null {
     const secret = url.searchParams.get('secret') || '';
     if (!secret || !isValidBase32(secret)) return null;
 
-    const algorithm = (url.searchParams.get('algorithm') || 'SHA1').toUpperCase();
     const digits = parseInt(url.searchParams.get('digits') || '6', 10);
     const period = parseInt(url.searchParams.get('period') || '30', 10);
 
     return {
       issuer: issuer || 'Authenticator',
-      account: account || 'user',
+      account: account || 'Account',
       secret: secret.toUpperCase(),
-      algorithm: algorithm.includes('256') ? 'SHA-256' : algorithm.includes('512') ? 'SHA-512' : 'SHA-1',
+      algorithm: 'SHA-1',
       digits: isNaN(digits) ? 6 : digits,
-      period: isNaN(period) ? 30 : period
+      period: isNaN(period) ? 30 : period,
+      type: isHotp ? 'hotp' : 'totp'
     };
   } catch (e) {
     return null;
@@ -280,69 +274,7 @@ async function decryptVault(ciphertextBase64: string, ivBase64: string, pin: str
 }
 
 // ==========================================
-// 3. 📷 ZXING CAMERA QR SCANNER
-// ==========================================
-class QRScannerService {
-  private codeReader: BrowserQRCodeReader;
-  private controls: IScannerControls | null = null;
-
-  constructor() {
-    this.codeReader = new BrowserQRCodeReader();
-  }
-
-  public async startScanning(
-    videoElement: HTMLVideoElement,
-    onSuccess: (result: ParsedOTPAuth) => void,
-    onError: (errorMsg: string) => void
-  ) {
-    try {
-      this.stopScanning();
-      this.controls = await this.codeReader.decodeFromVideoDevice(
-        undefined,
-        videoElement,
-        (result, _error, controls) => {
-          if (result) {
-            const rawText = result.getText();
-            if (!rawText.startsWith('otpauth://')) {
-              onError('Scanned QR code is not a valid 2FA authenticator QR code.');
-              return;
-            }
-            const parsed = parseOTPAuthURI(rawText);
-            if (!parsed) {
-              onError('Invalid TOTP URI format in QR code.');
-              return;
-            }
-            if (!isValidBase32(parsed.secret)) {
-              onError('The secret key in this QR code is not a valid Base32 string.');
-              return;
-            }
-            controls.stop();
-            this.controls = null;
-            onSuccess(parsed);
-          }
-        }
-      );
-    } catch (err: any) {
-      onError(
-        err.name === 'NotAllowedError'
-          ? 'Camera permission denied.'
-          : 'Camera error: ' + (err.message || 'Unknown device error')
-      );
-    }
-  }
-
-  public stopScanning() {
-    if (this.controls) {
-      this.controls.stop();
-      this.controls = null;
-    }
-  }
-}
-
-const qrScanner = new QRScannerService();
-
-// ==========================================
-// 4. 🎨 SVG ICONS
+// 3. 🎨 PREMIUM SVG ICONS (Accessible)
 // ==========================================
 const IconShield = ({ size = 24 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -419,17 +351,22 @@ const IconComputer = ({ size = 20 }: { size?: number }) => (
   </svg>
 );
 
+const IconChevronDown = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
 // ==========================================
-// 5. 🚀 MAIN APPLICATION COMPONENT
+// 4. 🚀 MAIN APP COMPONENT
 // ==========================================
 interface AuthenticatorItem {
   id: string;
-  issuer: string;
-  account: string;
-  secret: string;
+  codeName: string;
+  key: string;
+  keyType: 'time' | 'counter';
   digits: number;
   period: number;
-  algorithm: string;
 }
 
 function MainApp() {
@@ -441,7 +378,7 @@ function MainApp() {
   const [vaultSalt, setVaultSalt] = useState<string>('default_salt');
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Setup / Unlock
+  // Setup / Unlock State
   const [setupStep, setSetupStep] = useState<number>(1);
   const [chosenLength, setChosenLength] = useState<number>(6);
   const [enteredPin, setEnteredPin] = useState<string>('');
@@ -450,32 +387,32 @@ function MainApp() {
   const [unlockPin, setUnlockPin] = useState<string>('');
   const [unlockError, setUnlockError] = useState<string>('');
 
-  // Accounts & TOTP
+  // Accounts & Live TOTP
   const [accounts, setAccounts] = useState<AuthenticatorItem[]>([]);
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
   const [timeLeft, setTimeLeft] = useState<number>(30);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Modals & Tabs
+  // Modals & Navigation
   const [showAddSheet, setShowAddSheet] = useState<boolean>(false);
   const [showManualModal, setShowManualModal] = useState<boolean>(false);
   const [showScannerModal, setShowScannerModal] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'vault' | 'devices'>('vault');
 
-  // Manual Form
-  const [manualIssuer, setManualIssuer] = useState('');
-  const [manualAccount, setManualAccount] = useState('');
-  const [manualSecret, setManualSecret] = useState('');
-  const [manualPreviewCode, setManualPreviewCode] = useState('');
-  const [manualError, setManualError] = useState('');
+  // Google Authenticator Enter Code Details Form
+  const [codeName, setCodeName] = useState('');
+  const [yourKey, setYourKey] = useState('');
+  const [keyType, setKeyType] = useState<'time' | 'counter'>('time');
+  const [previewCode, setPreviewCode] = useState('');
+  const [formError, setFormError] = useState('');
 
   // Camera QR Scanner State
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [scannerError, setScannerError] = useState('');
   const [scannedResult, setScannedResult] = useState<ParsedOTPAuth | null>(null);
-  const [previewScannedCode, setPreviewScannedCode] = useState('');
+  const [scannerControls, setScannerControls] = useState<IScannerControls | null>(null);
 
-  // Sessions
+  // Active Sessions
   const [sessions, setSessions] = useState<any[]>([]);
 
   useEffect(() => {
@@ -504,10 +441,10 @@ function MainApp() {
       const calculated: Record<string, string> = {};
       for (const acc of accounts) {
         calculated[acc.id] = await calculateTOTP(
-          acc.secret,
+          acc.key,
           acc.period || 30,
           acc.digits || 6,
-          acc.algorithm || 'SHA-1',
+          'SHA-1',
           now
         );
       }
@@ -522,71 +459,62 @@ function MainApp() {
     };
   }, [isUnlocked, accounts]);
 
+  // Live Preview calculation as user types setup key
   useEffect(() => {
-    const clean = manualSecret.replace(/\s+/g, '').toUpperCase();
+    const clean = yourKey.replace(/\s+/g, '').toUpperCase();
     if (isValidBase32(clean)) {
-      calculateTOTP(clean).then(setManualPreviewCode);
-      setManualError('');
+      calculateTOTP(clean).then(setPreviewCode);
+      setFormError('');
     } else {
-      setManualPreviewCode('');
-      if (clean.length >= 4) setManualError('Invalid Base32 secret key');
+      setPreviewCode('');
+      if (clean.length >= 4) setFormError('Invalid Base32 Secret Key');
     }
-  }, [manualSecret]);
+  }, [yourKey]);
 
-  // Camera Scanner Lifecycle
-  const openScanner = () => {
-    setShowAddSheet(false);
-    setShowScannerModal(true);
-    setScannerError('');
-    setScannedResult(null);
-  };
-
+  // Camera QR Scanner Lifecycle
   useEffect(() => {
     if (showScannerModal && videoRef.current && !scannedResult) {
-      qrScanner.startScanning(
-        videoRef.current,
-        async (parsed: ParsedOTPAuth) => {
-          const code = await calculateTOTP(parsed.secret);
-          setPreviewScannedCode(code);
-          setScannedResult(parsed);
-        },
-        (errorMsg: string) => {
-          setScannerError(errorMsg);
-        }
-      );
+      const codeReader = new BrowserQRCodeReader();
+      codeReader
+        .decodeFromVideoDevice(undefined, videoRef.current, (result, _error, controls) => {
+          if (result) {
+            const raw = result.getText();
+            const parsed = parseOTPAuthURI(raw);
+            if (parsed && isValidBase32(parsed.secret)) {
+              controls.stop();
+              setScannedResult(parsed);
+              calculateTOTP(parsed.secret).then(setPreviewCode);
+            } else {
+              setScannerError('Not a valid 2FA QR code');
+            }
+          }
+        })
+        .then((controls) => setScannerControls(controls))
+        .catch((err) => setScannerError('Camera access denied: ' + err.message));
     }
 
     return () => {
-      qrScanner.stopScanning();
+      if (scannerControls) {
+        scannerControls.stop();
+        setScannerControls(null);
+      }
     };
   }, [showScannerModal, scannedResult]);
 
   const closeScanner = () => {
-    qrScanner.stopScanning();
+    if (scannerControls) {
+      scannerControls.stop();
+      setScannerControls(null);
+    }
     setShowScannerModal(false);
     setScannedResult(null);
     setScannerError('');
   };
 
-  const handleSaveScanned = async () => {
-    if (!scannedResult) return;
-    const newItem: AuthenticatorItem = {
-      id: Date.now().toString(),
-      issuer: scannedResult.issuer,
-      account: scannedResult.account,
-      secret: scannedResult.secret,
-      digits: scannedResult.digits,
-      period: scannedResult.period,
-      algorithm: scannedResult.algorithm
-    };
-    await saveAccountsToVault([...accounts, newItem]);
-    closeScanner();
-  };
-
   // Vault Unlock & Save
   const handleUnlock = async () => {
     if (unlockPin.length !== pinLength) {
-      setUnlockError(`Please enter a valid ${pinLength}-digit PIN`);
+      setUnlockError(`Please enter your ${pinLength}-digit PIN`);
       return;
     }
 
@@ -614,7 +542,7 @@ function MainApp() {
       setIsUnlocked(true);
       setUnlockError('');
     } catch (e: any) {
-      setUnlockError('Incorrect PIN or corrupted vault');
+      setUnlockError('Incorrect PIN');
     }
   };
 
@@ -649,17 +577,17 @@ function MainApp() {
         setAccounts([]);
         setIsUnlocked(true);
       } else {
-        setSetupError('Server rejected vault creation');
+        setSetupError('Failed to create vault');
       }
     } catch (err: any) {
-      setSetupError(err.message || 'Failed to create vault');
+      setSetupError(err.message || 'Error creating vault');
     }
   };
 
-  const saveAccountsToVault = async (newAccounts: AuthenticatorItem[]) => {
-    setAccounts(newAccounts);
+  const saveAccounts = async (newAccs: AuthenticatorItem[]) => {
+    setAccounts(newAccs);
     try {
-      const encrypted = await encryptVault(newAccounts, currentPin, vaultSalt);
+      const encrypted = await encryptVault(newAccs, currentPin, vaultSalt);
       await fetch('/api/vault/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -670,33 +598,45 @@ function MainApp() {
         })
       });
     } catch (e) {
-      console.error('Failed to sync vault:', e);
+      console.error(e);
     }
   };
 
-  const handleAddManual = async (e: React.FormEvent) => {
+  const handleSaveManual = (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanSecret = manualSecret.replace(/\s+/g, '').toUpperCase();
-    if (!isValidBase32(cleanSecret)) {
-      setManualError('Invalid Base32 secret key');
+    const cleanKey = yourKey.replace(/\s+/g, '').toUpperCase();
+    if (!isValidBase32(cleanKey)) {
+      setFormError('Invalid Base32 Key');
       return;
     }
 
     const newItem: AuthenticatorItem = {
       id: Date.now().toString(),
-      issuer: manualIssuer.trim() || 'Authenticator',
-      account: manualAccount.trim() || 'user',
-      secret: cleanSecret,
+      codeName: codeName.trim() || 'Authenticator',
+      key: cleanKey,
+      keyType: keyType,
       digits: 6,
-      period: 30,
-      algorithm: 'SHA-1'
+      period: 30
     };
 
-    await saveAccountsToVault([...accounts, newItem]);
-    setManualIssuer('');
-    setManualAccount('');
-    setManualSecret('');
+    saveAccounts([...accounts, newItem]);
+    setCodeName('');
+    setYourKey('');
     setShowManualModal(false);
+  };
+
+  const handleSaveScanned = () => {
+    if (!scannedResult) return;
+    const newItem: AuthenticatorItem = {
+      id: Date.now().toString(),
+      codeName: `${scannedResult.issuer} (${scannedResult.account})`,
+      key: scannedResult.secret,
+      keyType: 'time',
+      digits: scannedResult.digits || 6,
+      period: scannedResult.period || 30
+    };
+    saveAccounts([...accounts, newItem]);
+    closeScanner();
   };
 
   const copyCode = (id: string, code: string) => {
@@ -706,9 +646,9 @@ function MainApp() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this authenticator?')) return;
-    await saveAccountsToVault(accounts.filter((a) => a.id !== id));
+  const handleDelete = (id: string) => {
+    if (!confirm('Delete this authenticator?')) return;
+    saveAccounts(accounts.filter((a) => a.id !== id));
   };
 
   const fetchSessions = async () => {
@@ -720,41 +660,72 @@ function MainApp() {
     }
   };
 
-  const handleLogoutOthers = async () => {
-    if (!confirm('Log out all other active sessions?')) return;
-    await fetch('/api/sessions/logout-others', { method: 'POST', credentials: 'include' });
-    fetchSessions();
-  };
-
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     setUser(null);
     setIsUnlocked(false);
-    setCurrentPin('');
+  };
+
+  // ==========================================
+  // 5. STYLES (Clean Scoped Mobile-First UI)
+  // ==========================================
+  const S = {
+    app: { minHeight: '100vh', backgroundColor: '#0d1117', color: '#f0f6fc', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' },
+    center: { display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', padding: 20, backgroundColor: '#0d1117' },
+    authCard: { background: '#161b22', border: '1px solid #30363d', borderRadius: 24, padding: 32, maxWidth: 380, width: '100%', textAlign: 'center' as const },
+    pinBox: { width: '80%', padding: '14px', fontSize: 32, textAlign: 'center' as const, letterSpacing: 10, backgroundColor: '#090d13', border: '1px solid #30363d', borderRadius: 16, color: '#fff', margin: '20px 0' },
+    btnPrimary: { width: '100%', padding: '14px 20px', background: '#238636', color: '#fff', fontWeight: 600, borderRadius: 16, border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 },
+    btnSecondary: { width: '100%', padding: '12px 18px', background: '#21262d', color: '#c9d1d9', fontWeight: 600, borderRadius: 16, border: '1px solid #30363d', cursor: 'pointer', fontSize: 15 },
+    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: '#161b22', borderBottom: '1px solid #30363d' },
+    tabs: { display: 'flex', background: '#0d1117', borderBottom: '1px solid #30363d' },
+    tab: (active: boolean) => ({ flex: 1, padding: 14, background: 'transparent', border: 'none', borderBottom: active ? '2px solid #58a6ff' : 'none', color: active ? '#58a6ff' : '#8b949e', fontWeight: 600, cursor: 'pointer' }),
+    card: { background: '#161b22', border: '1px solid #30363d', borderRadius: 20, padding: '20px', marginBottom: 16, position: 'relative' as const },
+    totpDigits: { fontFamily: 'ui-monospace, monospace', fontSize: 40, fontWeight: 700, letterSpacing: 6, color: '#58a6ff' },
+    timerRing: { background: '#21262d', width: 42, height: 42, borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: 13, fontWeight: 'bold', border: '2px solid #30363d' },
+    googleInputBox: { width: '100%', padding: '14px 16px', background: '#0d1117', border: '1px solid #388bfd', borderRadius: 12, color: '#f0f6fc', fontSize: 16, boxSizing: 'border-box' as const, outline: 'none' },
+    label: { display: 'block', fontSize: 14, color: '#8b949e', marginBottom: 8, fontWeight: 500 }
   };
 
   if (loading) {
     return (
-      <div className="center-screen">
-        <IconShield size={48} />
-        <p>Loading Authenticator Vault...</p>
+      <div style={S.center}>
+        <div style={{ textAlign: 'center', color: '#58a6ff' }}>
+          <IconShield size={48} />
+          <p style={{ marginTop: 12 }}>Loading Vault...</p>
+        </div>
       </div>
     );
   }
 
+  // 1. Google OAuth Sign-in
   if (!user) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <div className="brand-badge"><IconShield size={40} /></div>
-          <h1>Khmer Authenticator Vault</h1>
-          <p className="subtitle">Secure, Zero-Knowledge 2FA Cloud Backup</p>
-          <a href="/api/auth/google" className="btn-google">
+      <div style={S.center}>
+        <div style={S.authCard}>
+          <div style={{ color: '#58a6ff', marginBottom: 16 }}><IconShield size={48} /></div>
+          <h2 style={{ margin: '0 0 8px 0' }}>Khmer Authenticator</h2>
+          <p style={{ color: '#8b949e', fontSize: 14, marginBottom: 24 }}>Secure, Zero-Knowledge 2FA Cloud Backup</p>
+          <a
+            href="/api/auth/google"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              background: '#fff',
+              color: '#000',
+              padding: '14px 20px',
+              borderRadius: 16,
+              textDecoration: 'none',
+              fontWeight: 600,
+              fontSize: 16
+            }}
+          >
             <svg width="20" height="20" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
             </svg>
             Sign in with Google
           </a>
@@ -763,60 +734,61 @@ function MainApp() {
     );
   }
 
+  // 2. Vault Setup (Step by Step)
   if (!hasVault) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
+      <div style={S.center}>
+        <div style={S.authCard}>
           <h2>Create Vault PIN</h2>
-          <p className="subtitle">Step {setupStep} of 3: Set your hardware unlock PIN</p>
+          <p style={{ color: '#8b949e', fontSize: 14 }}>Step {setupStep} of 3</p>
 
           {setupStep === 1 && (
-            <div>
-              <p className="input-label">Select PIN Length:</p>
-              <div className="button-group">
-                <button className={`btn-choice ${chosenLength === 4 ? 'active' : ''}`} onClick={() => setChosenLength(4)}>
+            <div style={{ marginTop: 20 }}>
+              <p style={{ color: '#8b949e', fontSize: 14 }}>Choose PIN Length:</p>
+              <div style={{ display: 'flex', gap: 12, margin: '16px 0 24px' }}>
+                <button
+                  style={{ flex: 1, padding: 14, borderRadius: 14, background: chosenLength === 4 ? '#238636' : '#21262d', color: '#fff', border: '1px solid #30363d', fontWeight: 600, cursor: 'pointer' }}
+                  onClick={() => setChosenLength(4)}
+                >
                   4-Digit PIN
                 </button>
-                <button className={`btn-choice ${chosenLength === 6 ? 'active' : ''}`} onClick={() => setChosenLength(6)}>
+                <button
+                  style={{ flex: 1, padding: 14, borderRadius: 14, background: chosenLength === 6 ? '#238636' : '#21262d', color: '#fff', border: '1px solid #30363d', fontWeight: 600, cursor: 'pointer' }}
+                  onClick={() => setChosenLength(6)}
+                >
                   6-Digit PIN
                 </button>
               </div>
-              <button className="btn-primary" onClick={() => setSetupStep(2)}>Continue</button>
+              <button style={S.btnPrimary} onClick={() => setSetupStep(2)}>Continue</button>
             </div>
           )}
 
           {setupStep === 2 && (
-            <div>
-              <p className="input-label">Enter your {chosenLength}-digit PIN:</p>
+            <div style={{ marginTop: 20 }}>
               <input
                 type="password"
                 maxLength={chosenLength}
                 autoFocus
-                className="pin-box"
+                style={S.pinBox}
                 value={enteredPin}
                 onChange={(e) => setEnteredPin(e.target.value.replace(/\D/g, ''))}
               />
-              <button className="btn-primary" disabled={enteredPin.length !== chosenLength} onClick={() => setSetupStep(3)}>
-                Next
-              </button>
+              <button style={S.btnPrimary} disabled={enteredPin.length !== chosenLength} onClick={() => setSetupStep(3)}>Next</button>
             </div>
           )}
 
           {setupStep === 3 && (
-            <div>
-              <p className="input-label">Confirm your PIN:</p>
+            <div style={{ marginTop: 20 }}>
               <input
                 type="password"
                 maxLength={chosenLength}
                 autoFocus
-                className="pin-box"
+                style={S.pinBox}
                 value={confirmPin}
                 onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
               />
-              {setupError && <p className="error-text">{setupError}</p>}
-              <button className="btn-primary" disabled={confirmPin.length !== chosenLength} onClick={handleCreateVault}>
-                Initialize Encrypted Vault
-              </button>
+              {setupError && <p style={{ color: '#f85149', fontSize: 14, marginBottom: 16 }}>{setupError}</p>}
+              <button style={S.btnPrimary} disabled={confirmPin.length !== chosenLength} onClick={handleCreateVault}>Create Vault</button>
             </div>
           )}
         </div>
@@ -824,56 +796,65 @@ function MainApp() {
     );
   }
 
+  // 3. Vault Locked Screen
   if (!isUnlocked) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <div className="brand-badge"><IconLock size={36} /></div>
+      <div style={S.center}>
+        <div style={S.authCard}>
+          <div style={{ color: '#58a6ff', marginBottom: 16 }}><IconLock size={44} /></div>
           <h2>LOCKED VAULT</h2>
-          <p className="subtitle">Enter your {pinLength}-digit Vault PIN</p>
+          <p style={{ color: '#8b949e', fontSize: 14, marginBottom: 20 }}>Enter your {pinLength}-digit Vault PIN</p>
           <input
             type="password"
             maxLength={pinLength}
             autoFocus
-            className="pin-box"
+            style={S.pinBox}
             value={unlockPin}
             onChange={(e) => setUnlockPin(e.target.value.replace(/\D/g, ''))}
             onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
           />
-          {unlockError && <p className="error-text">{unlockError}</p>}
-          <button className="btn-primary" onClick={handleUnlock}>Unlock Vault</button>
-          <button className="btn-link" onClick={handleLogout}>Sign Out</button>
+          {unlockError && <p style={{ color: '#f85149', fontSize: 14, marginBottom: 16 }}>{unlockError}</p>}
+          <button style={S.btnPrimary} onClick={handleUnlock}>Unlock Vault</button>
+          <button style={{ ...S.btnSecondary, marginTop: 12 }} onClick={handleLogout}>Sign Out</button>
         </div>
       </div>
     );
   }
 
+  // 4. Main Authenticator Dashboard (Unlocked)
   return (
-    <div className="app-shell">
-      <header className="navbar">
-        <div className="user-profile">
-          <img src={user.avatarUrl || 'https://via.placeholder.com/40'} alt="Avatar" className="avatar-img" />
+    <div style={S.app}>
+      <header style={S.header}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <img src={user.avatarUrl || 'https://via.placeholder.com/40'} alt="Avatar" style={{ width: 40, height: 40, borderRadius: '50%' }} />
           <div>
-            <div className="user-name">{user.name}</div>
-            <div className="user-email">{user.email}</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{user.name}</div>
+            <div style={{ color: '#8b949e', fontSize: 12 }}>{user.email}</div>
           </div>
         </div>
-        <div className="nav-actions">
-          <button className="btn-icon" onClick={() => setIsUnlocked(false)} aria-label="Lock Vault">
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => setIsUnlocked(false)}
+            style={{ background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            title="Lock Vault"
+          >
             <IconLock size={18} />
           </button>
-          <button className="btn-action" onClick={() => setShowAddSheet(true)}>
+          <button
+            onClick={() => setShowAddSheet(true)}
+            style={{ background: '#238636', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 20, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+          >
             <IconPlus size={16} /> Add
           </button>
         </div>
       </header>
 
-      <nav className="tab-container">
-        <button className={`tab-btn ${activeTab === 'vault' ? 'active' : ''}`} onClick={() => setActiveTab('vault')}>
+      <nav style={S.tabs}>
+        <button style={S.tab(activeTab === 'vault')} onClick={() => setActiveTab('vault')}>
           Authenticators ({accounts.length})
         </button>
         <button
-          className={`tab-btn ${activeTab === 'devices' ? 'active' : ''}`}
+          style={S.tab(activeTab === 'devices')}
           onClick={() => {
             setActiveTab('devices');
             fetchSessions();
@@ -883,40 +864,64 @@ function MainApp() {
         </button>
       </nav>
 
-      <main className="main-content">
+      <main style={{ maxWidth: 540, margin: '0 auto', padding: '20px' }}>
         {activeTab === 'vault' && (
           <div>
             {accounts.length === 0 ? (
-              <div className="empty-panel">
-                <IconShield size={44} />
+              <div style={{ textAlign: 'center', padding: '60px 20px', background: '#161b22', borderRadius: 24, border: '1px solid #30363d' }}>
+                <div style={{ color: '#58a6ff', marginBottom: 16 }}><IconShield size={48} /></div>
                 <h3>No Authenticator Accounts</h3>
-                <p>Scan a QR code or enter a setup key to get started.</p>
-                <button className="btn-primary" onClick={() => setShowAddSheet(true)}>
+                <p style={{ color: '#8b949e', fontSize: 14, marginBottom: 20 }}>Tap + Add to scan a QR code or enter a setup key.</p>
+                <button style={{ ...S.btnPrimary, maxWidth: 220, margin: '0 auto' }} onClick={() => setShowAddSheet(true)}>
                   <IconPlus size={16} /> Add Authenticator
                 </button>
               </div>
             ) : (
-              <div className="card-list">
+              <div>
                 {accounts.map((acc) => {
                   const code = totpCodes[acc.id] || '------';
                   const formatted = `${code.slice(0, 3)} ${code.slice(3, 6)}`;
                   return (
-                    <article key={acc.id} className="totp-card">
-                      <div className="card-header">
+                    <article key={acc.id} style={S.card}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <div>
-                          <span className="issuer-tag">{acc.issuer}</span>
-                          <h3 className="account-tag">{acc.account}</h3>
+                          <h3 style={{ margin: '0 0 4px 0', fontSize: 18, color: '#f0f6fc' }}>{acc.codeName}</h3>
+                          <span style={{ fontSize: 12, color: '#8b949e' }}>{acc.keyType === 'time' ? 'Time-based (30s)' : 'Counter-based'}</span>
                         </div>
-                        <button className="btn-delete" onClick={() => handleDelete(acc.id)}>
-                          <IconTrash size={16} />
+                        <button
+                          onClick={() => handleDelete(acc.id)}
+                          style={{ background: 'transparent', border: 'none', color: '#f85149', cursor: 'pointer', padding: 4 }}
+                        >
+                          <IconTrash size={18} />
                         </button>
                       </div>
-                      <div className="code-container" onClick={() => copyCode(acc.id, code)}>
-                        <span className="totp-digits">{formatted}</span>
-                        <div className="timer-badge">{timeLeft}s</div>
+
+                      <div
+                        onClick={() => copyCode(acc.id, code)}
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0', cursor: 'pointer' }}
+                      >
+                        <span style={S.totpDigits}>{formatted}</span>
+                        <div style={S.timerRing}>{timeLeft}s</div>
                       </div>
-                      <button className={`btn-copy ${copiedId === acc.id ? 'copied' : ''}`} onClick={() => copyCode(acc.id, code)}>
-                        {copiedId === acc.id ? <><IconCheck size={16} /> Copied</> : <><IconCopy size={16} /> Copy Code</>}
+
+                      <button
+                        onClick={() => copyCode(acc.id, code)}
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          borderRadius: 12,
+                          border: '1px solid #30363d',
+                          background: copiedId === acc.id ? '#238636' : '#21262d',
+                          color: '#f0f6fc',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 8
+                        }}
+                      >
+                        {copiedId === acc.id ? <><IconCheck size={16} /> Copied to Clipboard</> : <><IconCopy size={16} /> Copy Code</>}
                       </button>
                     </article>
                   );
@@ -927,23 +932,14 @@ function MainApp() {
         )}
 
         {activeTab === 'devices' && (
-          <div className="devices-panel">
-            <div className="devices-header">
-              <h3>Active Sessions ({sessions.length})</h3>
-              <button className="btn-danger" onClick={handleLogoutOthers}>Log Out Others</button>
-            </div>
+          <div>
+            <h3 style={{ marginBottom: 16 }}>Active Sessions ({sessions.length})</h3>
             {sessions.map((s) => (
-              <div key={s.id} className="device-card">
-                <div className="device-icon">
-                  {s.device_type === 'phone' ? <IconPhone size={22} /> : <IconComputer size={22} />}
-                </div>
-                <div className="device-details">
-                  <div className="device-title">
-                    {s.device_name}
-                    {s.is_current_device && <span className="current-tag">This Device</span>}
-                  </div>
-                  <div className="device-meta">{s.browser} • {s.operating_system}</div>
-                  <div className="device-time">Last active: {new Date(s.last_active_at).toLocaleString()}</div>
+              <div key={s.id} style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 16, padding: 16, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ color: '#58a6ff' }}>{s.device_type === 'phone' ? <IconPhone size={24} /> : <IconComputer size={24} />}</div>
+                <div>
+                  <div style={{ fontWeight: 600 }}>{s.device_name} {s.is_current_device && <span style={{ background: '#238636', color: '#fff', fontSize: 10, padding: '2px 6px', borderRadius: 6, marginLeft: 6 }}>Current</span>}</div>
+                  <div style={{ color: '#8b949e', fontSize: 12 }}>{s.browser} • {s.operating_system}</div>
                 </div>
               </div>
             ))}
@@ -953,90 +949,140 @@ function MainApp() {
 
       {/* iOS Bottom Sheet */}
       {showAddSheet && (
-        <div className="sheet-backdrop" onClick={() => setShowAddSheet(false)}>
-          <div className="sheet-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Add Authenticator</h3>
-            <button className="sheet-btn" onClick={openScanner}>
+        <div
+          onClick={() => setShowAddSheet(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#161b22', width: '100%', maxWidth: 500, borderRadius: '24px 24px 0 0', padding: 24, border: '1px solid #30363d' }}
+          >
+            <h3 style={{ margin: '0 0 16px 0' }}>Add Authenticator</h3>
+            <button
+              onClick={() => { setShowAddSheet(false); setShowScannerModal(true); }}
+              style={{ ...S.btnSecondary, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, padding: 16 }}
+            >
               <IconCamera size={20} /> Scan QR Code
             </button>
-            <button className="sheet-btn" onClick={() => { setShowAddSheet(false); setShowManualModal(true); }}>
-              <IconKeyboard size={20} /> Enter Setup Key
+            <button
+              onClick={() => { setShowAddSheet(false); setShowManualModal(true); }}
+              style={{ ...S.btnSecondary, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, padding: 16 }}
+            >
+              <IconKeyboard size={20} /> Enter code details
             </button>
-            <button className="sheet-btn cancel" onClick={() => setShowAddSheet(false)}>Cancel</button>
+            <button
+              onClick={() => setShowAddSheet(false)}
+              style={{ width: '100%', padding: 14, background: 'transparent', color: '#f85149', border: 'none', fontWeight: 600, cursor: 'pointer' }}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
 
-      {/* Camera QR Scanner Modal */}
+      {/* Google Authenticator Enter Code Details Screen */}
+      {showManualModal && (
+        <div
+          onClick={() => setShowManualModal(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 24, padding: 24, maxWidth: 440, width: '100%' }}
+          >
+            <h3 style={{ margin: '0 0 20px 0' }}>Enter code details</h3>
+            <form onSubmit={handleSaveManual}>
+              <div style={{ marginBottom: 16 }}>
+                <label style={S.label}>Code name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Google: user@gmail.com"
+                  style={S.googleInputBox}
+                  value={codeName}
+                  onChange={(e) => setCodeName(e.target.value)}
+                />
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={S.label}>Your key</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. D44XJYF47MNA7GP2FJFMYGM6UFEJ6LLS"
+                  style={S.googleInputBox}
+                  value={yourKey}
+                  onChange={(e) => setYourKey(e.target.value)}
+                />
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={S.label}>Type of key</label>
+                <div style={{ position: 'relative' }}>
+                  <select
+                    style={{ ...S.googleInputBox, appearance: 'none', paddingRight: 36 }}
+                    value={keyType}
+                    onChange={(e) => setKeyType(e.target.value as 'time' | 'counter')}
+                  >
+                    <option value="time">Time based</option>
+                    <option value="counter">Counter based</option>
+                  </select>
+                  <div style={{ position: 'absolute', right: 14, top: 18, pointerEvents: 'none', color: '#8b949e' }}>
+                    <IconChevronDown size={18} />
+                  </div>
+                </div>
+              </div>
+
+              {previewCode && (
+                <div style={{ background: '#090d13', border: '1px solid #238636', borderRadius: 12, padding: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, color: '#8b949e' }}>Generated Code Preview:</span>
+                  <strong style={{ fontSize: 20, color: '#58a6ff', fontFamily: 'monospace' }}>{previewCode}</strong>
+                </div>
+              )}
+
+              {formError && <p style={{ color: '#f85149', fontSize: 13, marginBottom: 16 }}>{formError}</p>}
+
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button type="button" style={S.btnSecondary} onClick={() => setShowManualModal(false)}>Cancel</button>
+                <button type="submit" style={S.btnPrimary} disabled={!previewCode}>Add</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ZXing Camera Scanner */}
       {showScannerModal && (
-        <div className="modal-backdrop" onClick={closeScanner}>
-          <div className="modal-dialog scanner-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Scan TOTP QR Code</h3>
+        <div
+          onClick={closeScanner}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 24, padding: 24, maxWidth: 400, width: '100%', textAlign: 'center' }}
+          >
+            <h3 style={{ margin: '0 0 16px 0' }}>Scan QR Code</h3>
             {scannerError ? (
-              <div className="error-panel">
-                <p className="error-text">{scannerError}</p>
-                <button className="btn-primary" onClick={() => { closeScanner(); setShowManualModal(true); }}>
-                  Switch to Manual Setup Key
-                </button>
+              <div>
+                <p style={{ color: '#f85149', marginBottom: 16 }}>{scannerError}</p>
+                <button style={S.btnPrimary} onClick={() => { closeScanner(); setShowManualModal(true); }}>Enter Setup Key</button>
               </div>
             ) : scannedResult ? (
-              <div className="confirm-panel">
-                <h4>Confirm Account</h4>
-                <div className="confirm-row"><span>Issuer:</span> <strong>{scannedResult.issuer}</strong></div>
-                <div className="confirm-row"><span>Account:</span> <strong>{scannedResult.account}</strong></div>
-                <div className="confirm-preview">
-                  <span>Current Code Preview:</span>
-                  <strong>{previewScannedCode}</strong>
-                </div>
-                <div className="modal-actions">
-                  <button className="btn-secondary" onClick={() => setScannedResult(null)}>Scan Again</button>
-                  <button className="btn-primary" onClick={handleSaveScanned}>Add Account</button>
+              <div>
+                <p>Found: <strong>{scannedResult.issuer} ({scannedResult.account})</strong></p>
+                <div style={{ margin: '16px 0', fontSize: 24, fontFamily: 'monospace', color: '#58a6ff' }}>{previewCode}</div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button style={S.btnSecondary} onClick={() => setScannedResult(null)}>Scan Again</button>
+                  <button style={S.btnPrimary} onClick={handleSaveScanned}>Save</button>
                 </div>
               </div>
             ) : (
               <div>
-                <div className="camera-frame">
-                  <video ref={videoRef} className="camera-view" playsInline muted autoPlay />
-                  <div className="scanner-crosshair" />
-                </div>
-                <p className="scanner-hint">Point your camera at a 2FA QR code</p>
-                <button className="btn-secondary" onClick={closeScanner}>Cancel</button>
+                <video ref={videoRef} style={{ width: '100%', height: 260, borderRadius: 16, objectFit: 'cover', background: '#000' }} autoPlay playsInline muted />
+                <p style={{ color: '#8b949e', fontSize: 13, marginTop: 12 }}>Point your camera at a 2FA QR code</p>
+                <button style={{ ...S.btnSecondary, marginTop: 12 }} onClick={closeScanner}>Cancel</button>
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Manual Setup Key Modal */}
-      {showManualModal && (
-        <div className="modal-backdrop" onClick={() => setShowManualModal(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>Enter Setup Key</h3>
-            <form onSubmit={handleAddManual}>
-              <div className="form-group">
-                <label>Issuer (e.g. Google, Facebook, Telegram)</label>
-                <input type="text" required placeholder="Google" value={manualIssuer} onChange={(e) => setManualIssuer(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label>Account (Email or Username)</label>
-                <input type="text" required placeholder="user@example.com" value={manualAccount} onChange={(e) => setManualAccount(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label>Setup Key (Base32)</label>
-                <input type="text" required placeholder="D44XJYF47MNA7GP2FJFMYGM6UFEJ6LLS" value={manualSecret} onChange={(e) => setManualSecret(e.target.value)} />
-              </div>
-              {manualPreviewCode && (
-                <div className="preview-box">
-                  <span>Live Code Preview:</span>
-                  <strong>{manualPreviewCode}</strong>
-                </div>
-              )}
-              {manualError && <p className="error-text">{manualError}</p>}
-              <div className="modal-actions">
-                <button type="button" className="btn-secondary" onClick={() => setShowManualModal(false)}>Cancel</button>
-                <button type="submit" className="btn-primary" disabled={!manualPreviewCode}>Save Account</button>
-              </div>
-            </form>
           </div>
         </div>
       )}
