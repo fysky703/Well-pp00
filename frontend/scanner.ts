@@ -9,9 +9,6 @@ export class QRScannerService {
     this.codeReader = new BrowserQRCodeReader();
   }
 
-  /**
-   * Starts the video stream on the given video element and listens for QR codes.
-   */
   public async startScanning(
     videoElement: HTMLVideoElement,
     onSuccess: (result: ParsedOTPAuth) => void,
@@ -21,32 +18,28 @@ export class QRScannerService {
       this.stopScanning();
 
       this.controls = await this.codeReader.decodeFromVideoDevice(
-        undefined, // Uses default rear camera (environment)
+        undefined,
         videoElement,
-        (result, error, controls) => {
+        (result, _error, controls) => {
           if (result) {
             const rawText = result.getText();
             
-            // 1. Verify URI starts with otpauth://
             if (!rawText.startsWith('otpauth://')) {
-              onError('Scanned QR is not a valid 2FA authenticator QR code.');
+              onError('Scanned QR code is not a valid otpauth:// format.');
               return;
             }
 
-            // 2. Parse otpauth:// format
             const parsed = parseOTPAuthURI(rawText);
             if (!parsed) {
               onError('Invalid TOTP URI format in QR code.');
               return;
             }
 
-            // 3. Strict Base32 Secret Validation
             if (!isValidBase32(parsed.secret)) {
-              onError('The secret key in this QR code is not a valid Base32 string.');
+              onError('The secret key in this QR code is not valid Base32.');
               return;
             }
 
-            // Stop camera on success and return parsed account data
             controls.stop();
             this.controls = null;
             onSuccess(parsed);
@@ -54,18 +47,14 @@ export class QRScannerService {
         }
       );
     } catch (err: any) {
-      console.error('Camera Init Error:', err);
       onError(
         err.name === 'NotAllowedError'
-          ? 'Camera permission denied. Please grant camera access in your browser settings.'
-          : 'Unable to access camera: ' + (err.message || 'Unknown device error')
+          ? 'Camera permission denied.'
+          : 'Camera error: ' + (err.message || 'Unknown device error')
       );
     }
   }
 
-  /**
-   * Stops active camera stream and releases media hardware.
-   */
   public stopScanning() {
     if (this.controls) {
       this.controls.stop();
