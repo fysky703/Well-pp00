@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
-import { calculateTOTP, getRemainingSeconds, isValidBase32, parseOTPAuthURI, ParsedOTPAuth } from './totp';
+import { calculateTOTP, getRemainingSeconds, isValidBase32, ParsedOTPAuth } from './totp';
 import { encryptVault, decryptVault } from './crypto';
+import { qrScanner } from './scanner';
 import {
   IconShield,
   IconLock,
@@ -35,14 +36,12 @@ function MainApp() {
   const [vaultSalt, setVaultSalt] = useState<string>('default_salt');
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Setup Flow
+  // Setup / Unlock States
   const [setupStep, setSetupStep] = useState<number>(1);
   const [chosenLength, setChosenLength] = useState<number>(6);
   const [enteredPin, setEnteredPin] = useState<string>('');
   const [confirmPin, setConfirmPin] = useState<string>('');
   const [setupError, setSetupError] = useState<string>('');
-
-  // Unlock State
   const [unlockPin, setUnlockPin] = useState<string>('');
   const [unlockError, setUnlockError] = useState<string>('');
 
@@ -69,41 +68,30 @@ function MainApp() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [scannerError, setScannerError] = useState('');
   const [scannedResult, setScannedResult] = useState<ParsedOTPAuth | null>(null);
-  const scanStreamRef = useRef<MediaStream | null>(null);
+  const [previewScannedCode, setPreviewScannedCode] = useState('');
 
   // Active Sessions
   const [sessions, setSessions] = useState<any[]>([]);
 
   // 1. Initial Authentication Check
-  const fetchAuth = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('/api/auth/me', { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data.user);
-        setHasVault(data.hasVault);
-        if (data.pinLength) setPinLength(data.pinLength);
-      } else {
-        setUser(null);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchAuth();
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) {
+          setUser(data.user);
+          setHasVault(data.hasVault);
+          if (data.pinLength) setPinLength(data.pinLength);
+        }
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  // 2. Real-Time RFC 6238 TOTP Generation (Syncs every second with Unix Time)
+  // 2. Real-Time RFC 6238 TOTP Clock Timer
   useEffect(() => {
     if (!isUnlocked || accounts.length === 0) return;
 
     let isMounted = true;
-
     const refreshCodes = async () => {
       const now = Date.now();
       const remaining = getRemainingSeconds(30, now);
@@ -130,7 +118,7 @@ function MainApp() {
     };
   }, [isUnlocked, accounts]);
 
-  // Preview manual code live as user types
+  // Live Manual Setup Key Preview
   useEffect(() => {
     const clean = manualSecret.replace(/\s+/g, '').toUpperCase();
     if (isValidBase32(clean)) {
@@ -138,11 +126,62 @@ function MainApp() {
       setManualError('');
     } else {
       setManualPreviewCode('');
-      if (clean.length >= 4) setManualError('Invalid Base32 characters');
+      if (clean.length >= 4) setManualError('Invalid Base32 secret key');
     }
   }, [manualSecret]);
 
-  // Load and Decrypt Vault
+  // 3. Camera Scanner Controls (ZXing)
+  const openScanner = () => {
+    setShowAddSheet(false);
+    setShowScannerModal(true);
+    setScannerError('');
+    setScannedResult(null);
+  };
+
+  useEffect(() => {
+    if (showScannerModal && videoRef.current && !scannedResult) {
+      qrScanner.startScanning(
+        videoRef.current,
+        async (parsed) => {
+          // Calculate instant preview code for confirmation screen
+          const code = await calculateTOTP(parsed.secret);
+          setPreviewScannedCode(code);
+          setScannedResult(parsed);
+        },
+        (errorMsg) => {
+          setScannerError(errorMsg);
+        }
+      );
+    }
+
+    return () => {
+      qrScanner.stopScanning();
+    };
+  }, [showScannerModal, scannedResult]);
+
+  const closeScanner = () => {
+    qrScanner.stopScanning();
+    setShowScannerModal(false);
+    setScannedResult(null);
+    setScannerError('');
+  };
+
+  const handleSaveScanned = async () => {
+    if (!scannedResult) return;
+    const newItem: AuthenticatorItem = {
+      id: Date.now().toString(),
+      issuer: scannedResult.issuer,
+      account: scannedResult.account,
+      secret: scannedResult.secret,
+      digits: scannedResult.digits,
+      period: scannedResult.period,
+      algorithm: scannedResult.algorithm
+    };
+    await saveAccountsToVault([...accounts, newItem]);
+    closeScanner();
+  };
+
+  // 4. Vault Decrypt & Save
   const handleUnlock = async () => {
     if (unlockPin.length !== pinLength) {
       setUnlockError(`Please enter a valid ${pinLength}-digit PIN`);
@@ -151,28 +190,20 @@ function MainApp() {
 
     try {
       const res = await fetch('/api/vault', { credentials: 'include' });
-      if (!res.ok) {
-        setUnlockError('Could not fetch vault data');
-        return;
-      }
+      if (!res.ok) throw new Error('Could not fetch vault data');
 
       const vaultData = await res.json();
       const salt = vaultData.pin_salt || 'vault_salt_v1';
       setVaultSalt(salt);
 
       if (vaultData.encrypted_data && vaultData.encryption_metadata?.iv) {
-        try {
-          const decrypted = await decryptVault(
-            vaultData.encrypted_data,
-            vaultData.encryption_metadata.iv,
-            unlockPin,
-            salt
-          );
-          setAccounts(decrypted);
-        } catch (decryptErr) {
-          setUnlockError('Incorrect PIN or corrupted vault');
-          return;
-        }
+        const decrypted = await decryptVault(
+          vaultData.encrypted_data,
+          vaultData.encryption_metadata.iv,
+          unlockPin,
+          salt
+        );
+        setAccounts(decrypted);
       } else {
         setAccounts([]);
       }
@@ -181,50 +212,10 @@ function MainApp() {
       setIsUnlocked(true);
       setUnlockError('');
     } catch (e: any) {
-      setUnlockError(e.message || 'Unlock failed');
+      setUnlockError('Incorrect PIN or corrupted vault');
     }
   };
 
-  // Create New Vault
-  const handleCreateVault = async () => {
-    if (enteredPin !== confirmPin) {
-      setSetupError('PINs do not match');
-      return;
-    }
-
-    try {
-      const salt = 'salt_' + Math.random().toString(36).substring(2);
-      const encrypted = await encryptVault([], enteredPin, salt);
-
-      const res = await fetch('/api/vault/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          pinHash: btoa(enteredPin),
-          pinSalt: salt,
-          pinLength: chosenLength,
-          encryptedData: encrypted.ciphertext,
-          encryptionMetadata: { iv: encrypted.iv, version: 1, cipher: 'AES-GCM-256' }
-        })
-      });
-
-      if (res.ok) {
-        setHasVault(true);
-        setPinLength(chosenLength);
-        setCurrentPin(enteredPin);
-        setVaultSalt(salt);
-        setAccounts([]);
-        setIsUnlocked(true);
-      } else {
-        setSetupError('Server rejected vault creation');
-      }
-    } catch (err: any) {
-      setSetupError(err.message || 'Failed to create vault');
-    }
-  };
-
-  // Save Account & Encrypt Vault
   const saveAccountsToVault = async (newAccounts: AuthenticatorItem[]) => {
     setAccounts(newAccounts);
     try {
@@ -268,76 +259,6 @@ function MainApp() {
     setShowManualModal(false);
   };
 
-  // Real Camera Scanner Start
-  const startCameraScanner = async () => {
-    setShowAddSheet(false);
-    setShowScannerModal(true);
-    setScannerError('');
-    setScannedResult(null);
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
-      });
-      scanStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-
-      // Check native BarcodeDetector support
-      if ('BarcodeDetector' in window) {
-        const detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
-        const interval = setInterval(async () => {
-          if (!videoRef.current || !scanStreamRef.current) {
-            clearInterval(interval);
-            return;
-          }
-          try {
-            const barcodes = await detector.detect(videoRef.current);
-            if (barcodes && barcodes.length > 0) {
-              const rawValue = barcodes[0].rawValue;
-              const parsed = parseOTPAuthURI(rawValue);
-              if (parsed) {
-                setScannedResult(parsed);
-                stopCameraScanner();
-                clearInterval(interval);
-              } else {
-                setScannerError('QR code is not a valid standard otpauth:// TOTP format.');
-              }
-            }
-          } catch {}
-        }, 500);
-      }
-    } catch (err: any) {
-      setScannerError('Camera access denied or unsupported on this device: ' + err.message);
-    }
-  };
-
-  const stopCameraScanner = () => {
-    if (scanStreamRef.current) {
-      scanStreamRef.current.getTracks().forEach((track) => track.stop());
-      scanStreamRef.current = null;
-    }
-  };
-
-  const handleSaveScanned = async () => {
-    if (!scannedResult) return;
-    const newItem: AuthenticatorItem = {
-      id: Date.now().toString(),
-      issuer: scannedResult.issuer,
-      account: scannedResult.account,
-      secret: scannedResult.secret,
-      digits: scannedResult.digits,
-      period: scannedResult.period,
-      algorithm: scannedResult.algorithm
-    };
-    await saveAccountsToVault([...accounts, newItem]);
-    setShowScannerModal(false);
-    setScannedResult(null);
-  };
-
-  // Copy Real TOTP Code
   const copyCode = (id: string, code: string) => {
     if (!code || code === '------') return;
     navigator.clipboard.writeText(code);
@@ -345,35 +266,9 @@ function MainApp() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Delete Account
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this authenticator?')) return;
     await saveAccountsToVault(accounts.filter((a) => a.id !== id));
-  };
-
-  // Sessions Management
-  const fetchSessions = async () => {
-    try {
-      const res = await fetch('/api/sessions', { credentials: 'include' });
-      if (res.ok) {
-        setSessions(await res.json());
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleLogoutOthers = async () => {
-    if (!confirm('Log out all other active sessions?')) return;
-    await fetch('/api/sessions/logout-others', { method: 'POST', credentials: 'include' });
-    fetchSessions();
-  };
-
-  const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-    setUser(null);
-    setIsUnlocked(false);
-    setCurrentPin('');
   };
 
   if (loading) {
@@ -385,14 +280,11 @@ function MainApp() {
     );
   }
 
-  // 1. Google OAuth Login Required
   if (!user) {
     return (
       <div className="auth-container">
         <div className="auth-card">
-          <div className="brand-badge">
-            <IconShield size={40} />
-          </div>
+          <div className="brand-badge"><IconShield size={40} /></div>
           <h1>Khmer Authenticator Vault</h1>
           <p className="subtitle">Secure, Zero-Knowledge 2FA Cloud Backup</p>
           <a href="/api/auth/google" className="btn-google">
@@ -409,95 +301,13 @@ function MainApp() {
     );
   }
 
-  // 2. Initial Setup Wizard
-  if (!hasVault) {
-    return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <h2>Create Vault PIN</h2>
-          <p className="subtitle">Step {setupStep} of 3: Set your hardware unlock PIN</p>
-
-          {setupStep === 1 && (
-            <div>
-              <p className="input-label">Select PIN Length:</p>
-              <div className="button-group">
-                <button
-                  className={`btn-choice ${chosenLength === 4 ? 'active' : ''}`}
-                  onClick={() => setChosenLength(4)}
-                >
-                  4-Digit PIN
-                </button>
-                <button
-                  className={`btn-choice ${chosenLength === 6 ? 'active' : ''}`}
-                  onClick={() => setChosenLength(6)}
-                >
-                  6-Digit PIN
-                </button>
-              </div>
-              <button className="btn-primary" onClick={() => setSetupStep(2)}>
-                Continue
-              </button>
-            </div>
-          )}
-
-          {setupStep === 2 && (
-            <div>
-              <p className="input-label">Enter your {chosenLength}-digit PIN:</p>
-              <input
-                type="password"
-                maxLength={chosenLength}
-                autoFocus
-                className="pin-box"
-                value={enteredPin}
-                onChange={(e) => setEnteredPin(e.target.value.replace(/\D/g, ''))}
-              />
-              <button
-                className="btn-primary"
-                disabled={enteredPin.length !== chosenLength}
-                onClick={() => setSetupStep(3)}
-              >
-                Next
-              </button>
-            </div>
-          )}
-
-          {setupStep === 3 && (
-            <div>
-              <p className="input-label">Confirm your PIN:</p>
-              <input
-                type="password"
-                maxLength={chosenLength}
-                autoFocus
-                className="pin-box"
-                value={confirmPin}
-                onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
-              />
-              {setupError && <p className="error-text">{setupError}</p>}
-              <button
-                className="btn-primary"
-                disabled={confirmPin.length !== chosenLength}
-                onClick={handleCreateVault}
-              >
-                Initialize Encrypted Vault
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // 3. Locked Vault Screen
   if (!isUnlocked) {
     return (
       <div className="auth-container">
         <div className="auth-card">
-          <div className="brand-badge">
-            <IconLock size={36} />
-          </div>
+          <div className="brand-badge"><IconLock size={36} /></div>
           <h2>LOCKED VAULT</h2>
-          <p className="subtitle">Enter your {pinLength}-digit Vault PIN to view authenticators</p>
-
+          <p className="subtitle">Enter your {pinLength}-digit Vault PIN</p>
           <input
             type="password"
             maxLength={pinLength}
@@ -507,21 +317,13 @@ function MainApp() {
             onChange={(e) => setUnlockPin(e.target.value.replace(/\D/g, ''))}
             onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
           />
-
           {unlockError && <p className="error-text">{unlockError}</p>}
-
-          <button className="btn-primary" onClick={handleUnlock}>
-            Unlock Vault
-          </button>
-          <button className="btn-link" onClick={handleLogout}>
-            Sign Out
-          </button>
+          <button className="btn-primary" onClick={handleUnlock}>Unlock Vault</button>
         </div>
       </div>
     );
   }
 
-  // 4. Main Authenticator Dashboard (Unlocked)
   return (
     <div className="app-shell">
       {/* Header */}
@@ -543,120 +345,60 @@ function MainApp() {
         </div>
       </header>
 
-      {/* Tabs */}
-      <nav className="tab-container">
-        <button
-          className={`tab-btn ${activeTab === 'vault' ? 'active' : ''}`}
-          onClick={() => setActiveTab('vault')}
-        >
-          Authenticators ({accounts.length})
-        </button>
-        <button
-          className={`tab-btn ${activeTab === 'devices' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('devices');
-            fetchSessions();
-          }}
-        >
-          Active Devices
-        </button>
-      </nav>
-
-      {/* Main Content */}
+      {/* Main List */}
       <main className="main-content">
-        {activeTab === 'vault' && (
-          <div>
-            {accounts.length === 0 ? (
-              <div className="empty-panel">
-                <IconShield size={44} />
-                <h3>No Authenticator Accounts</h3>
-                <p>Add your first 2FA account using a Setup Key or Camera Scan.</p>
-                <button className="btn-primary" onClick={() => setShowAddSheet(true)}>
-                  <IconPlus size={16} /> Add Authenticator
-                </button>
-              </div>
-            ) : (
-              <div className="card-list">
-                {accounts.map((acc) => {
-                  const code = totpCodes[acc.id] || '------';
-                  const formatted = `${code.slice(0, 3)} ${code.slice(3, 6)}`;
-                  return (
-                    <article key={acc.id} className="totp-card">
-                      <div className="card-header">
-                        <div>
-                          <span className="issuer-tag">{acc.issuer}</span>
-                          <h3 className="account-tag">{acc.account}</h3>
-                        </div>
-                        <button
-                          className="btn-delete"
-                          onClick={() => handleDelete(acc.id)}
-                          aria-label="Delete authenticator"
-                        >
-                          <IconTrash size={16} />
-                        </button>
-                      </div>
-
-                      <div className="code-container" onClick={() => copyCode(acc.id, code)}>
-                        <span className="totp-digits">{formatted}</span>
-                        <div className="timer-badge">{timeLeft}s</div>
-                      </div>
-
-                      <button
-                        className={`btn-copy ${copiedId === acc.id ? 'copied' : ''}`}
-                        onClick={() => copyCode(acc.id, code)}
-                      >
-                        {copiedId === acc.id ? (
-                          <>
-                            <IconCheck size={16} /> Copied to Clipboard
-                          </>
-                        ) : (
-                          <>
-                            <IconCopy size={16} /> Copy Code
-                          </>
-                        )}
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
+        {accounts.length === 0 ? (
+          <div className="empty-panel">
+            <IconShield size={44} />
+            <h3>No Authenticator Accounts</h3>
+            <p>Scan a QR code or enter a setup key to get started.</p>
+            <button className="btn-primary" onClick={() => setShowAddSheet(true)}>
+              <IconPlus size={16} /> Add Authenticator
+            </button>
           </div>
-        )}
-
-        {activeTab === 'devices' && (
-          <div className="devices-panel">
-            <div className="devices-header">
-              <h3>Active Sessions ({sessions.length})</h3>
-              <button className="btn-danger" onClick={handleLogoutOthers}>
-                Log Out Others
-              </button>
-            </div>
-
-            {sessions.map((s) => (
-              <div key={s.id} className="device-card">
-                <div className="device-icon">
-                  {s.device_type === 'phone' ? <IconPhone size={22} /> : <IconComputer size={22} />}
-                </div>
-                <div className="device-details">
-                  <div className="device-title">
-                    {s.device_name}
-                    {s.is_current_device && <span className="current-tag">This Device</span>}
+        ) : (
+          <div className="card-list">
+            {accounts.map((acc) => {
+              const code = totpCodes[acc.id] || '------';
+              const formatted = `${code.slice(0, 3)} ${code.slice(3, 6)}`;
+              return (
+                <article key={acc.id} className="totp-card">
+                  <div className="card-header">
+                    <div>
+                      <span className="issuer-tag">{acc.issuer}</span>
+                      <h3 className="account-tag">{acc.account}</h3>
+                    </div>
+                    <button className="btn-delete" onClick={() => handleDelete(acc.id)}>
+                      <IconTrash size={16} />
+                    </button>
                   </div>
-                  <div className="device-meta">{s.browser} • {s.operating_system}</div>
-                  <div className="device-time">Last active: {new Date(s.last_active_at).toLocaleString()}</div>
-                </div>
-              </div>
-            ))}
+                  <div className="code-container" onClick={() => copyCode(acc.id, code)}>
+                    <span className="totp-digits">{formatted}</span>
+                    <div className="timer-badge">{timeLeft}s</div>
+                  </div>
+                  <button
+                    className={`btn-copy ${copiedId === acc.id ? 'copied' : ''}`}
+                    onClick={() => copyCode(acc.id, code)}
+                  >
+                    {copiedId === acc.id ? (
+                      <><IconCheck size={16} /> Copied</>
+                    ) : (
+                      <><IconCopy size={16} /> Copy Code</>
+                    )}
+                  </button>
+                </article>
+              );
+            })}
           </div>
         )}
       </main>
 
-      {/* iOS-Style Add Bottom Sheet */}
+      {/* iOS Bottom Sheet */}
       {showAddSheet && (
         <div className="sheet-backdrop" onClick={() => setShowAddSheet(false)}>
           <div className="sheet-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Add Authenticator</h3>
-            <button className="sheet-btn" onClick={startCameraScanner}>
+            <button className="sheet-btn" onClick={openScanner}>
               <IconCamera size={20} /> Scan QR Code
             </button>
             <button
@@ -675,24 +417,38 @@ function MainApp() {
         </div>
       )}
 
-      {/* Real Camera QR Scanner Modal */}
+      {/* ZXing Live Camera Scanner Modal */}
       {showScannerModal && (
-        <div className="modal-backdrop" onClick={() => { stopCameraScanner(); setShowScannerModal(false); }}>
+        <div className="modal-backdrop" onClick={closeScanner}>
           <div className="modal-dialog scanner-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Scan TOTP QR Code</h3>
+            
             {scannerError ? (
               <div className="error-panel">
-                <p>{scannerError}</p>
-                <button className="btn-primary" onClick={() => { stopCameraScanner(); setShowScannerModal(false); setShowManualModal(true); }}>
+                <p className="error-text">{scannerError}</p>
+                <button
+                  className="btn-primary"
+                  onClick={() => {
+                    closeScanner();
+                    setShowManualModal(true);
+                  }}
+                >
                   Switch to Manual Setup Key
                 </button>
               </div>
             ) : scannedResult ? (
               <div className="confirm-panel">
-                <h4>Confirm Authenticator Account</h4>
-                <p><strong>Issuer:</strong> {scannedResult.issuer}</p>
-                <p><strong>Account:</strong> {scannedResult.account}</p>
-                <p><strong>Period:</strong> {scannedResult.period}s | <strong>Digits:</strong> {scannedResult.digits}</p>
+                <h4>Confirm Account</h4>
+                <div className="confirm-row">
+                  <span>Issuer:</span> <strong>{scannedResult.issuer}</strong>
+                </div>
+                <div className="confirm-row">
+                  <span>Account:</span> <strong>{scannedResult.account}</strong>
+                </div>
+                <div className="confirm-preview">
+                  <span>Current Code Preview:</span>
+                  <strong>{previewScannedCode}</strong>
+                </div>
                 <div className="modal-actions">
                   <button className="btn-secondary" onClick={() => setScannedResult(null)}>
                     Scan Again
@@ -704,9 +460,12 @@ function MainApp() {
               </div>
             ) : (
               <div>
-                <video ref={videoRef} className="camera-view" playsInline muted />
-                <p className="scanner-hint">Point your camera at a standard TOTP QR code</p>
-                <button className="btn-secondary" onClick={() => { stopCameraScanner(); setShowScannerModal(false); }}>
+                <div className="camera-frame">
+                  <video ref={videoRef} className="camera-view" playsInline muted autoPlay />
+                  <div className="scanner-crosshair" />
+                </div>
+                <p className="scanner-hint">Point your camera at a 2FA QR code</p>
+                <button className="btn-secondary" onClick={closeScanner}>
                   Cancel
                 </button>
               </div>
@@ -722,7 +481,7 @@ function MainApp() {
             <h3>Enter Setup Key</h3>
             <form onSubmit={handleAddManual}>
               <div className="form-group">
-                <label>Issuer (e.g., Google, Telegram, Facebook)</label>
+                <label>Issuer (e.g. Google, Facebook, Telegram)</label>
                 <input
                   type="text"
                   required
@@ -731,38 +490,33 @@ function MainApp() {
                   onChange={(e) => setManualIssuer(e.target.value)}
                 />
               </div>
-
               <div className="form-group">
-                <label>Account Name (e.g., user@example.com)</label>
+                <label>Account (Email or Username)</label>
                 <input
                   type="text"
                   required
-                  placeholder="user@gmail.com"
+                  placeholder="user@example.com"
                   value={manualAccount}
                   onChange={(e) => setManualAccount(e.target.value)}
                 />
               </div>
-
               <div className="form-group">
-                <label>Setup Secret Key (Base32)</label>
+                <label>Setup Key (Base32)</label>
                 <input
                   type="text"
                   required
-                  placeholder="JBSWY3DPEHPK3PXP"
+                  placeholder="D44XJYF47MNA7GP2FJFMYGM6UFEJ6LLS"
                   value={manualSecret}
                   onChange={(e) => setManualSecret(e.target.value)}
                 />
               </div>
-
               {manualPreviewCode && (
                 <div className="preview-box">
-                  <span>Live TOTP Preview:</span>
+                  <span>Live Code Preview:</span>
                   <strong>{manualPreviewCode}</strong>
                 </div>
               )}
-
               {manualError && <p className="error-text">{manualError}</p>}
-
               <div className="modal-actions">
                 <button type="button" className="btn-secondary" onClick={() => setShowManualModal(false)}>
                   Cancel
