@@ -3,16 +3,34 @@
  * Compatible 100% with Google Authenticator, Telegram, Facebook, Microsoft.
  */
 
-// 1. RFC 4648 Base32 Decoder
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+export interface ParsedOTPAuth {
+  issuer: string;
+  account: string;
+  secret: string;
+  algorithm: string;
+  digits: number;
+  period: number;
+}
+
+export function isValidBase32(secret: string): boolean {
+  const clean = secret.toUpperCase().replace(/[\s=-]/g, '');
+  if (!clean || clean.length < 4) return false;
+  for (let i = 0; i < clean.length; i++) {
+    if (!BASE32_ALPHABET.includes(clean[i])) return false;
+  }
+  return true;
+}
+
 export function base32ToBytes(str: string): Uint8Array {
-  const base32chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   const clean = str.toUpperCase().replace(/[\s=-]/g, '');
   const bytes: number[] = [];
   let buffer = 0;
   let bitsLeft = 0;
 
   for (let i = 0; i < clean.length; i++) {
-    const val = base32chars.indexOf(clean[i]);
+    const val = BASE32_ALPHABET.indexOf(clean[i]);
     if (val === -1) continue;
 
     buffer = (buffer << 5) | val;
@@ -27,17 +45,6 @@ export function base32ToBytes(str: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
-export function isValidBase32(secret: string): boolean {
-  const clean = secret.toUpperCase().replace(/[\s=-]/g, '');
-  if (!clean || clean.length < 4) return false;
-  const base32chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  for (let i = 0; i < clean.length; i++) {
-    if (base32chars.indexOf(clean[i]) === -1) return false;
-  }
-  return true;
-}
-
-// 2. Pure JavaScript SHA-1 & HMAC (Guaranteed to work across all mobile browsers & WebViews)
 function sha1(bytes: Uint8Array): Uint8Array {
   const K = [0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6];
   let h0 = 0x67452301;
@@ -55,7 +62,6 @@ function sha1(bytes: Uint8Array): Uint8Array {
   padded[len] = 0x80;
 
   const view = new DataView(padded.buffer);
-  // Big-endian 64-bit length
   view.setUint32(totalLen - 4, bitLen, false);
 
   const w = new Uint32Array(80);
@@ -140,7 +146,6 @@ function hmacSha1(key: Uint8Array, message: Uint8Array): Uint8Array {
   return sha1(outer);
 }
 
-// 3. Main TOTP Function (RFC 6238)
 export async function calculateTOTP(
   secret: string,
   period = 30,
@@ -151,20 +156,16 @@ export async function calculateTOTP(
   const keyBytes = base32ToBytes(secret);
   if (keyBytes.length === 0) return '------';
 
-  // Counter: floor(seconds / period)
   const epoch = Math.floor(timestamp / 1000);
   const counter = Math.floor(epoch / period);
 
-  // 8-byte big endian counter
   const msg = new Uint8Array(8);
   const view = new DataView(msg.buffer);
   view.setUint32(0, 0, false);
   view.setUint32(4, counter, false);
 
-  // Calculate HMAC-SHA1
   const hmac = hmacSha1(keyBytes, msg);
 
-  // Dynamic Truncation (RFC 4226)
   const offset = hmac[hmac.length - 1] & 0x0f;
   const binary =
     ((hmac[offset] & 0x7f) << 24) |
@@ -179,4 +180,39 @@ export async function calculateTOTP(
 export function getRemainingSeconds(period = 30, timestamp = Date.now()): number {
   const epoch = Math.floor(timestamp / 1000);
   return period - (epoch % period);
+}
+
+export function parseOTPAuthURI(uriString: string): ParsedOTPAuth | null {
+  try {
+    if (!uriString.startsWith('otpauth://totp/')) return null;
+    const url = new URL(uriString);
+    
+    let label = decodeURIComponent(url.pathname.replace(/^\/totp\//, '').replace(/^\//, ''));
+    let issuer = url.searchParams.get('issuer') || '';
+    let account = label;
+
+    if (label.includes(':')) {
+      const parts = label.split(':');
+      if (!issuer) issuer = parts[0].trim();
+      account = parts.slice(1).join(':').trim();
+    }
+
+    const secret = url.searchParams.get('secret') || '';
+    if (!secret || !isValidBase32(secret)) return null;
+
+    const algorithm = (url.searchParams.get('algorithm') || 'SHA1').toUpperCase();
+    const digits = parseInt(url.searchParams.get('digits') || '6', 10);
+    const period = parseInt(url.searchParams.get('period') || '30', 10);
+
+    return {
+      issuer: issuer || 'Authenticator',
+      account: account || 'user',
+      secret: secret.toUpperCase(),
+      algorithm: algorithm.includes('256') ? 'SHA-256' : algorithm.includes('512') ? 'SHA-512' : 'SHA-1',
+      digits: isNaN(digits) ? 6 : digits,
+      period: isNaN(period) ? 30 : period
+    };
+  } catch (e) {
+    return null;
+  }
 }
