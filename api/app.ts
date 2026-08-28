@@ -1,360 +1,238 @@
-import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import crypto from 'node:crypto';
 import { Pool } from 'pg';
+import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
-import QRCode from 'qrcode';
-import speakeasy from 'speakeasy';
-import bcrypt from 'bcryptjs';
 
-const app = express();
-app.set('trust proxy', 1);
-app.use(express.json({ limit: '100kb' }));
-app.use(cookieParser());
-
-const isProd = process.env.NODE_ENV === 'production';
-const APP_URL = process.env.APP_URL || 'http://localhost:5173';
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/api/auth/google/callback';
-
-for (const name of ['DATABASE_URL', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'MASTER_KEY_HEX']) {
-  if (!process.env[name]) console.warn(`Missing environment variable: ${name}`);
-}
+export const app = express();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('localhost') ? false : { rejectUnauthorized: false },
-  max: 5,
-  idleTimeoutMillis: 10_000
+  ssl: { rejectUnauthorized: false }
 });
 
-const oauth = new OAuth2Client(
+const googleClient = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  GOOGLE_REDIRECT_URI
+  process.env.GOOGLE_REDIRECT_URI
 );
 
-const MASTER_KEY = Buffer.from(process.env.MASTER_KEY_HEX || '', 'hex');
-if (MASTER_KEY.length !== 32) {
-  console.warn('MASTER_KEY_HEX must decode to exactly 32 bytes. Run: npm run generate:key');
+app.use(express.json());
+app.use(cookieParser());
+app.use(cors({
+  origin: process.env.APP_URL || true,
+  credentials: true
+}));
+
+// Helper: Hash Session Token
+function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-const SESSION_COOKIE = 'khmer_session';
-const OAUTH_STATE_COOKIE = 'google_oauth_state';
-const SESSION_DAYS = 7;
-
-type User = {
-  id: string;
-  google_id: string;
-  email: string;
-  name: string;
-  avatar_url: string | null;
-  totp_enabled: boolean;
-};
-
-type SessionRow = {
-  id: string;
-  user_id: string;
-  two_factor_verified: boolean;
-  expires_at: string;
-  google_id: string;
-  email: string;
-  name: string;
-  avatar_url: string | null;
-  totp_enabled: boolean;
-};
-
-function randomToken(bytes = 32) {
-  return crypto.randomBytes(bytes).toString('base64url');
-}
-
-function sha256(value: string) {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-function encrypt(value: string) {
-  if (MASTER_KEY.length !== 32) throw new Error('MASTER_KEY_HEX is not configured correctly');
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', MASTER_KEY, iv);
-  const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return `${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`;
-}
-
-function decrypt(payload: string) {
-  if (MASTER_KEY.length !== 32) throw new Error('MASTER_KEY_HEX is not configured correctly');
-  const [ivPart, tagPart, dataPart] = payload.split('.');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', MASTER_KEY, Buffer.from(ivPart, 'base64url'));
-  decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
-  return Buffer.concat([
-    decipher.update(Buffer.from(dataPart, 'base64url')),
-    decipher.final()
-  ]).toString('utf8');
-}
-
-async function createSession(userId: string, twoFactorVerified: boolean) {
-  const raw = randomToken();
-  const id = sha256(raw);
-  const expires = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-  await pool.query(
-    `INSERT INTO sessions (id, user_id, two_factor_verified, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [id, userId, twoFactorVerified, expires]
-  );
-  return { raw, expires };
-}
-
-function setSessionCookie(res: Response, raw: string) {
-  res.cookie(SESSION_COOKIE, raw, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
-    ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {})
-  });
-}
-
-async function getSession(req: Request): Promise<SessionRow | null> {
-  const raw = req.cookies?.[SESSION_COOKIE];
-  if (!raw) return null;
-  const id = sha256(raw);
-  const { rows } = await pool.query<SessionRow>(
-    `SELECT s.id, s.user_id, s.two_factor_verified, s.expires_at,
-            u.google_id, u.email, u.name, u.avatar_url, u.totp_enabled
-       FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.id = $1 AND s.expires_at > NOW()`
-    , [id]
-  );
-  return rows[0] || null;
-}
-
-async function requireSignedIn(req: Request, res: Response, next: NextFunction) {
+// Middleware: Authenticate User Session
+export async function requireAuth(req: Request & { user?: any; sessionId?: string }, res: Response, next: NextFunction) {
   try {
-    const session = await getSession(req);
-    if (!session) return res.status(401).json({ message: 'សូមចូលគណនីជាមុនសិន។' });
-    (req as any).session = session;
-    next();
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'មានបញ្ហាជាមួយ server។' });
-  }
-}
-
-async function requireFullyAuthenticated(req: Request, res: Response, next: NextFunction) {
-  await requireSignedIn(req, res, () => {
-    const session = (req as any).session as SessionRow;
-    if (session.totp_enabled && !session.two_factor_verified) {
-      return res.status(403).json({ message: 'សូមផ្ទៀងផ្ទាត់ Google Authenticator ជាមុនសិន។', code: 'TWO_FACTOR_REQUIRED' });
+    const sessionToken = req.cookies?.session_token || req.headers.authorization?.replace('Bearer ', '');
+    if (!sessionToken) {
+      return res.status(401).json({ error: 'Authentication required' });
     }
+
+    const tokenHash = hashToken(sessionToken);
+    const query = `
+      SELECT s.id as session_id, s.user_id, u.email, u.name, u.avatar_url, u.google_id
+      FROM user_sessions s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.session_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
+    `;
+    const result = await pool.query(query, [tokenHash]);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Session expired or revoked' });
+    }
+
+    // Update last_active_at asynchronously
+    pool.query('UPDATE user_sessions SET last_active_at = NOW() WHERE id = $1', [result.rows[0].session_id]).catch(console.error);
+
+    req.user = result.rows[0];
+    req.sessionId = result.rows[0].session_id;
     next();
-  });
+  } catch (err) {
+    return res.status(500).json({ error: 'Internal auth error' });
+  }
 }
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'khmer-google-2fa' }));
-
-app.get('/api/auth/google', async (_req, res) => {
-  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-    return res.status(500).send('Google OAuth configuration is missing.');
-  }
-  const state = randomToken(24);
-  res.cookie(OAUTH_STATE_COOKIE, state, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 10 * 60 * 1000
-  });
-  const url = oauth.generateAuthUrl({
+// 1. Google OAuth Flow
+app.get('/api/auth/google', (req, res) => {
+  const url = googleClient.generateAuthUrl({
     access_type: 'offline',
-    scope: ['openid', 'email', 'profile'],
-    state,
-    prompt: 'select_account'
+    scope: ['https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/userinfo.email'],
+    prompt: 'consent'
   });
   res.redirect(url);
 });
 
 app.get('/api/auth/google/callback', async (req, res) => {
+  const code = req.query.code as string;
+  if (!code) return res.status(400).send('Authorization code missing');
+
   try {
-    const { code, state } = req.query as { code?: string; state?: string };
-    const expectedState = req.cookies?.[OAUTH_STATE_COOKIE];
-    res.clearCookie(OAUTH_STATE_COOKIE, { path: '/' });
-    if (!code || !state || !expectedState || state !== expectedState) {
-      return res.redirect(`${APP_URL}/?error=oauth_state`);
-    }
+    const { tokens } = await googleClient.getToken(code);
+    googleClient.setCredentials(tokens);
 
-    const { tokens } = await oauth.getToken(code);
-    if (!tokens.id_token) throw new Error('Google did not return an ID token');
-    const ticket = await oauth.verifyIdToken({ idToken: tokens.id_token, audience: process.env.GOOGLE_CLIENT_ID });
-    const payload = ticket.getPayload();
-    if (!payload?.sub || !payload.email) throw new Error('Google account data is incomplete');
+    const ticket = await googleClient.verifyIdToken({
+      idToken: tokens.id_token!,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload()!;
 
-    const googleId = payload.sub;
-    const email = payload.email;
-    const name = payload.name || email.split('@')[0];
-    const avatar = payload.picture || null;
+    // Upsert User
+    const userRes = await pool.query(`
+      INSERT INTO users (google_id, email, name, avatar_url)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (google_id) DO UPDATE 
+      SET name = EXCLUDED.name, avatar_url = EXCLUDED.avatar_url, updated_at = NOW()
+      RETURNING id, email, name, avatar_url
+    `, [payload.sub, payload.email, payload.name, payload.picture]);
 
-    const existing = await pool.query<User>(`SELECT * FROM users WHERE google_id = $1`, [googleId]);
-    let user: User;
-    if (existing.rows[0]) {
-      const updated = await pool.query<User>(
-        `UPDATE users SET email=$2, name=$3, avatar_url=$4, updated_at=NOW() WHERE google_id=$1 RETURNING id, google_id, email, name, avatar_url, totp_enabled`,
-        [googleId, email, name, avatar]
-      );
-      user = updated.rows[0];
-    } else {
-      const created = await pool.query<User>(
-        `INSERT INTO users (google_id, email, name, avatar_url) VALUES ($1,$2,$3,$4)
-         RETURNING id, google_id, email, name, avatar_url, totp_enabled`,
-        [googleId, email, name, avatar]
-      );
-      user = created.rows[0];
-    }
+    const user = userRes.rows[0];
 
-    // If 2FA is enabled, OAuth only establishes identity; the session remains pending until OTP succeeds.
-    const { raw, expires } = await createSession(user.id, !user.totp_enabled);
-    setSessionCookie(res, raw);
-    res.redirect(`${APP_URL}/?auth=success&expires=${encodeURIComponent(expires.toISOString())}`);
+    // Create New Session
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = hashToken(rawToken);
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+    const ua = req.headers['user-agent'] || '';
+    const isMobile = /mobile/i.test(ua);
+    const isTablet = /tablet|ipad/i.test(ua);
+    const deviceType = isTablet ? 'tablet' : isMobile ? 'phone' : 'desktop';
+    const deviceName = isMobile ? 'Mobile Device' : 'Desktop Browser';
+
+    await pool.query(`
+      INSERT INTO user_sessions (user_id, session_token_hash, device_name, device_type, user_agent, expires_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [user.id, tokenHash, deviceName, deviceType, ua, expiresAt]);
+
+    res.cookie('session_token', rawToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      expires: expiresAt
+    });
+
+    res.redirect('/');
   } catch (error) {
-    console.error('Google callback:', error);
-    res.redirect(`${APP_URL}/?error=oauth_failed`);
+    console.error('OAuth error:', error);
+    res.status(500).send('Authentication failed');
   }
 });
 
-app.get('/api/auth/me', requireSignedIn, async (req, res) => {
-  const session = (req as any).session as SessionRow;
+// 2. Current User Profile
+app.get('/api/me', requireAuth, async (req: any, res) => {
+  const vaultRes = await pool.query('SELECT pin_length, updated_at FROM vaults WHERE user_id = $1', [req.user.user_id]);
+  const hasVault = vaultRes.rows.length > 0;
   res.json({
-    authenticated: true,
-    requiresTwoFactor: session.totp_enabled && !session.two_factor_verified,
     user: {
-      id: session.user_id,
-      email: session.email,
-      name: session.name,
-      avatarUrl: session.avatar_url,
-      twoFactorEnabled: session.totp_enabled
-    }
+      id: req.user.user_id,
+      name: req.user.name,
+      email: req.user.email,
+      avatarUrl: req.user.avatar_url
+    },
+    hasVault,
+    pinLength: hasVault ? vaultRes.rows[0].pin_length : null
   });
 });
 
-app.post('/api/auth/logout', async (req, res) => {
+// 3. Vault Operations (Zero Knowledge Encrypted Data Sync)
+app.post('/api/vault/create', requireAuth, async (req: any, res) => {
+  const { pinHash, pinSalt, pinLength, encryptedData, encryptionMetadata } = req.body;
+  if (!pinHash || !pinSalt || !pinLength) {
+    return res.status(400).json({ error: 'Missing required vault setup fields' });
+  }
+
   try {
-    const raw = req.cookies?.[SESSION_COOKIE];
-    if (raw) await pool.query(`DELETE FROM sessions WHERE id=$1`, [sha256(raw)]);
-    res.clearCookie(SESSION_COOKIE, { path: '/' });
-    res.json({ ok: true });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'មិនអាចចាកចេញបានទេ។' });
+    await pool.query(`
+      INSERT INTO vaults (user_id, pin_hash, pin_salt, pin_length, encrypted_data, encryption_metadata)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (user_id) DO UPDATE
+      SET pin_hash = EXCLUDED.pin_hash,
+          pin_salt = EXCLUDED.pin_salt,
+          pin_length = EXCLUDED.pin_length,
+          encrypted_data = EXCLUDED.encrypted_data,
+          encryption_metadata = EXCLUDED.encryption_metadata,
+          updated_at = NOW()
+    `, [req.user.user_id, pinHash, pinSalt, pinLength, encryptedData || '', JSON.stringify(encryptionMetadata || {})]);
+
+    res.json({ success: true, message: 'Vault initialized successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create vault' });
   }
 });
 
-app.post('/api/auth/2fa/verify', requireSignedIn, async (req, res) => {
+app.get('/api/vault', requireAuth, async (req: any, res) => {
   try {
-    const session = (req as any).session as SessionRow;
-    if (!session.totp_enabled) return res.status(400).json({ message: 'គណនីនេះមិនទាន់បើក 2FA ទេ។' });
-    const code = String(req.body?.code || '').replace(/\s/g, '');
-    if (!code) return res.status(400).json({ message: 'សូមបញ្ចូលលេខកូដ។' });
-
-    const result = await pool.query<{ totp_secret_encrypted: string | null; backup_codes_hashes: string[] }>(
-      `SELECT totp_secret_encrypted, backup_codes_hashes FROM users WHERE id=$1`, [session.user_id]
-    );
-    const encrypted = result.rows[0]?.totp_secret_encrypted;
-    if (!encrypted) return res.status(400).json({ message: 'មិនមាន Google Authenticator secret ទេ។' });
-
-    let ok = false;
-    if (/^\d{6}$/.test(code)) {
-      const secret = decrypt(encrypted);
-      ok = speakeasy.totp.verify({ secret, encoding: 'base32', token: code, window: 1 });
+    const result = await pool.query('SELECT pin_hash, pin_salt, pin_length, encrypted_data, encryption_metadata FROM vaults WHERE user_id = $1', [req.user.user_id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Vault not found' });
     }
-
-    if (!ok && code.includes('-')) {
-      const hashes = result.rows[0]?.backup_codes_hashes || [];
-      for (let i = 0; i < hashes.length; i++) {
-        if (await bcrypt.compare(code.toUpperCase(), hashes[i])) {
-          hashes.splice(i, 1);
-          await pool.query(`UPDATE users SET backup_codes_hashes=$2 WHERE id=$1`, [session.user_id, hashes]);
-          ok = true;
-          break;
-        }
-      }
-    }
-
-    if (!ok) return res.status(401).json({ message: 'លេខកូដមិនត្រឹមត្រូវ ឬផុតកំណត់។' });
-
-    await pool.query(`UPDATE sessions SET two_factor_verified=true WHERE id=$1`, [session.id]);
-    res.json({ ok: true });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'មិនអាចផ្ទៀងផ្ទាត់បានទេ។' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve vault' });
   }
 });
 
-app.post('/api/auth/2fa/setup', requireFullyAuthenticated, async (req, res) => {
+app.post('/api/vault/sync', requireAuth, async (req: any, res) => {
+  const { encryptedData, encryptionMetadata } = req.body;
   try {
-    const session = (req as any).session as SessionRow;
-    if (session.totp_enabled) return res.status(400).json({ message: 'Google Authenticator ត្រូវបានបើករួចហើយ។' });
-
-    const secret = speakeasy.generateSecret({ length: 20, name: `${session.email}`, issuer: 'Khmer Secure Website' });
-    const encrypted = encrypt(secret.base32);
-    await pool.query(`UPDATE users SET totp_secret_encrypted=$2 WHERE id=$1`, [session.user_id, encrypted]);
-    const qrDataUrl = await QRCode.toDataURL(secret.otpauth_url || '');
-
-    res.json({ ok: true, qrDataUrl, manualKey: secret.base32 });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'មិនអាចបង្កើត QR Code បានទេ។' });
+    await pool.query(`
+      UPDATE vaults 
+      SET encrypted_data = $1, encryption_metadata = $2, updated_at = NOW() 
+      WHERE user_id = $3
+    `, [encryptedData, JSON.stringify(encryptionMetadata), req.user.user_id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to sync vault' });
   }
 });
 
-app.post('/api/auth/2fa/enable', requireFullyAuthenticated, async (req, res) => {
+// 4. Active Devices & Remote Logout
+app.get('/api/sessions', requireAuth, async (req: any, res) => {
   try {
-    const session = (req as any).session as SessionRow;
-    if (session.totp_enabled) return res.status(400).json({ message: '2FA ត្រូវបានបើករួចហើយ។' });
-    const code = String(req.body?.code || '').replace(/\s/g, '');
-    const result = await pool.query<{ totp_secret_encrypted: string | null }>(
-      `SELECT totp_secret_encrypted FROM users WHERE id=$1`, [session.user_id]
-    );
-    const encrypted = result.rows[0]?.totp_secret_encrypted;
-    if (!encrypted) return res.status(400).json({ message: 'សូមចាប់ផ្តើម setup 2FA មុន។' });
-    const secret = decrypt(encrypted);
-    const ok = speakeasy.totp.verify({ secret, encoding: 'base32', token: code, window: 1 });
-    if (!ok) return res.status(401).json({ message: 'កូដមិនត្រឹមត្រូវ។' });
+    const result = await pool.query(`
+      SELECT id, device_name, device_type, browser, operating_system, last_active_at, created_at,
+             (id = $1) as is_current_device
+      FROM user_sessions
+      WHERE user_id = $2 AND revoked_at IS NULL AND expires_at > NOW()
+      ORDER BY last_active_at DESC
+    `, [req.sessionId, req.user.user_id]);
 
-    const backupCodes: string[] = Array.from({ length: 8 }, () => `${randomToken(5).slice(0, 5)}-${randomToken(5).slice(0, 5)}`.toUpperCase());
-    await pool.query(`UPDATE users SET totp_enabled=true, updated_at=NOW() WHERE id=$1`, [session.user_id]);
-    const hashes = await Promise.all(backupCodes.map((item) => bcrypt.hash(item, 12)));
-    await pool.query(`UPDATE users SET backup_codes_hashes=$2 WHERE id=$1`, [session.user_id, hashes]);
-    await pool.query(`UPDATE sessions SET two_factor_verified=true WHERE id=$1`, [session.id]);
-
-    res.json({ ok: true, backupCodes });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'មិនអាចបើក 2FA បានទេ។' });
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch sessions' });
   }
 });
 
-app.post('/api/auth/2fa/disable', requireFullyAuthenticated, async (req, res) => {
+app.delete('/api/sessions/:id', requireAuth, async (req: any, res) => {
+  const sessionId = req.params.id;
   try {
-    const session = (req as any).session as SessionRow;
-    const code = String(req.body?.code || '').replace(/\s/g, '');
-    if (!/^\d{6}$/.test(code)) return res.status(400).json({ message: 'សូមបញ្ចូលលេខ 6 ខ្ទង់ពី Authenticator។' });
-    const result = await pool.query<{ totp_secret_encrypted: string | null }>(`SELECT totp_secret_encrypted FROM users WHERE id=$1`, [session.user_id]);
-    const encrypted = result.rows[0]?.totp_secret_encrypted;
-    if (!encrypted) return res.status(400).json({ message: '2FA មិនបានកំណត់ទេ។' });
-    const secret = decrypt(encrypted);
-    const ok = speakeasy.totp.verify({ secret, encoding: 'base32', token: code, window: 1 });
-    if (!ok) return res.status(401).json({ message: 'កូដមិនត្រឹមត្រូវ។' });
-    await pool.query(`UPDATE users SET totp_enabled=false, totp_secret_encrypted=NULL, backup_codes_hashes=NULL, updated_at=NOW() WHERE id=$1`, [session.user_id]);
-    res.json({ ok: true });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'មិនអាចបិទ 2FA បានទេ។' });
+    await pool.query('UPDATE user_sessions SET revoked_at = NOW() WHERE id = $1 AND user_id = $2', [sessionId, req.user.user_id]);
+    res.json({ success: true, message: 'Device logged out' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to revoke session' });
   }
 });
 
-app.use((error: any, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(error);
-  res.status(500).json({ message: 'មានបញ្ហាជាមួយ server។' });
+app.post('/api/sessions/logout-others', requireAuth, async (req: any, res) => {
+  try {
+    await pool.query('UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = $1 AND id != $2', [req.user.user_id, req.sessionId]);
+    res.json({ success: true, message: 'All other devices logged out' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to revoke other sessions' });
+  }
 });
 
-export default app;
+app.post('/api/auth/logout', requireAuth, async (req: any, res) => {
+  await pool.query('UPDATE user_sessions SET revoked_at = NOW() WHERE id = $1', [req.sessionId]);
+  res.clearCookie('session_token');
+  res.json({ success: true });
+});
