@@ -1,10 +1,60 @@
-<!doctype html>
-<html lang="km">
+<!DOCTYPE html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Google Login និង Google Authenticator 2FA" />
-    <title>សុវត្ថិភាពគណនី</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#02090D" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Ocean AI Authenticator</title>
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html {
+        width: 100%;
+        height: 100%;
+        background-color: #02090D;
+        overflow-x: hidden;
+        -webkit-text-size-adjust: 100%;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        min-height: 100vh;
+        min-height: 100dvh;
+        background-color: #02090D;
+        color: #F3FAFA;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+        overflow-x: hidden;
+        overscroll-behavior-y: none;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: pan-y;
+      }
+
+      #root {
+        width: 100%;
+        min-height: 100vh;
+        min-height: 100dvh;
+        background-color: #02090D;
+        display: flex;
+        flex-direction: column;
+      }
+
+      input, select, button, textarea {
+        font-family: inherit;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
