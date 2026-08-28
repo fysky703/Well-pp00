@@ -412,3 +412,28 @@ app.post('/api/auth/logout', requireAuth, async (req: AuthRequest, res: Response
     res.status(500).json({ error: 'Logout failed' });
   }
 });
+// បន្ថែមនៅខាងក្រោម app.get('/api/me', ...)
+
+// គាំទ្រទាំង 2 ទម្រង់ URL
+app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const vaultRes = await pool.query(
+      'SELECT pin_length, updated_at FROM vaults WHERE user_id = $1',
+      [req.user!.user_id]
+    );
+
+    const hasVault = vaultRes.rows.length > 0;
+    res.json({
+      user: {
+        id: req.user!.user_id,
+        name: req.user!.name,
+        email: req.user!.email,
+        avatarUrl: req.user!.avatar_url
+      },
+      hasVault,
+      pinLength: hasVault ? vaultRes.rows[0].pin_length : null
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
