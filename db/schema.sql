@@ -1,23 +1,52 @@
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Users Table
 CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  google_id TEXT UNIQUE NOT NULL,
-  email TEXT UNIQUE NOT NULL,
-  name TEXT NOT NULL,
-  avatar_url TEXT,
-  totp_secret_encrypted TEXT,
-  totp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-  backup_codes_hashes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    google_id VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    avatar_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-  id TEXT PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  two_factor_verified BOOLEAN NOT NULL DEFAULT FALSE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+-- Vaults Table (Zero-Knowledge / Encrypted storage)
+CREATE TABLE IF NOT EXISTS vaults (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pin_hash VARCHAR(255) NOT NULL,
+    pin_salt VARCHAR(255) NOT NULL,
+    pin_length INT NOT NULL DEFAULT 6,
+    encrypted_data TEXT, -- AES-256-GCM encrypted payload
+    encryption_metadata JSONB, -- IV, auth tag, derivation parameters
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_user_vault UNIQUE (user_id)
 );
 
-CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_vaults_user_id ON vaults(user_id);
+
+-- User Sessions / Active Devices Table
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_token_hash VARCHAR(255) UNIQUE NOT NULL,
+    device_name VARCHAR(255) NOT NULL,
+    device_type VARCHAR(50) NOT NULL DEFAULT 'phone', -- 'phone', 'tablet', 'desktop'
+    browser VARCHAR(100),
+    operating_system VARCHAR(100),
+    user_agent TEXT,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_active_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    revoked_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON user_sessions(session_token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON user_sessions(user_id) WHERE revoked_at IS NULL;
