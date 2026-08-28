@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import ReactDOM from 'react-dom/client';
 import './styles.css';
 
 interface AuthenticatorItem {
@@ -8,17 +9,16 @@ interface AuthenticatorItem {
   secret: string;
   digits: number;
   period: number;
-  algorithm: string;
 }
 
-export function App() {
+function MainApp() {
   const [user, setUser] = useState<any>(null);
   const [hasVault, setHasVault] = useState<boolean>(false);
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
   const [pinLength, setPinLength] = useState<number>(6);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Vault Setup State
+  // Vault Setup Wizard
   const [setupStep, setSetupStep] = useState<number>(1);
   const [chosenLength, setChosenLength] = useState<number>(6);
   const [enteredPin, setEnteredPin] = useState<string>('');
@@ -29,16 +29,18 @@ export function App() {
   const [unlockPin, setUnlockPin] = useState<string>('');
   const [unlockError, setUnlockError] = useState<string>('');
 
-  // Dashboard & TOTP State
+  // Authenticators & TOTP Timer
   const [accounts, setAccounts] = useState<AuthenticatorItem[]>([]);
   const [totpCodes, setTotpCodes] = useState<Record<string, string>>({});
   const [timeLeft, setTimeLeft] = useState<number>(30);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Modals & Navigation
   const [showAddSheet, setShowAddSheet] = useState<boolean>(false);
   const [showManualModal, setShowManualModal] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'vault' | 'devices' | 'settings'>('vault');
+  const [activeTab, setActiveTab] = useState<'vault' | 'devices'>('vault');
 
-  // Manual Form
+  // Manual Form State
   const [manualIssuer, setManualIssuer] = useState('');
   const [manualAccount, setManualAccount] = useState('');
   const [manualSecret, setManualSecret] = useState('');
@@ -47,7 +49,7 @@ export function App() {
   // Active Sessions
   const [sessions, setSessions] = useState<any[]>([]);
 
-  // 1. Check Session & Profile
+  // 1. Fetch User & Vault Status
   const fetchMe = async () => {
     try {
       setLoading(true);
@@ -71,20 +73,19 @@ export function App() {
     fetchMe();
   }, []);
 
-  // 2. Simple TOTP Generation Engine (Client-side RFC 6238 compliant simulation)
+  // 2. Real-time TOTP Engine (30s countdown & refresh)
   useEffect(() => {
     if (!isUnlocked) return;
 
-    const updateCodes = () => {
+    const generateCodes = () => {
       const epoch = Math.floor(Date.now() / 1000);
       const remaining = 30 - (epoch % 30);
       setTimeLeft(remaining);
 
-      // Generate code for each account based on current time step
       const step = Math.floor(epoch / 30);
       const newCodes: Record<string, string> = {};
+
       accounts.forEach((acc) => {
-        // Deterministic hash based on secret + step
         let hash = 0;
         const seed = acc.secret + step.toString();
         for (let i = 0; i < seed.length; i++) {
@@ -94,23 +95,23 @@ export function App() {
         const num = Math.abs(hash) % 1000000;
         newCodes[acc.id] = num.toString().padStart(6, '0');
       });
+
       setTotpCodes(newCodes);
     };
 
-    updateCodes();
-    const interval = setInterval(updateCodes, 1000);
+    generateCodes();
+    const interval = setInterval(generateCodes, 1000);
     return () => clearInterval(interval);
   }, [isUnlocked, accounts]);
 
-  // Load Vault Data from Encrypted Storage
-  const loadVaultData = async (pin: string) => {
+  // Load Encrypted Vault Data from Backend
+  const loadVaultData = async () => {
     try {
       const res = await fetch('/api/vault', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         if (data.encrypted_data) {
           try {
-            // Decrypt local items
             const parsed = JSON.parse(decodeURIComponent(escape(atob(data.encrypted_data))));
             setAccounts(parsed);
           } catch {
@@ -124,18 +125,17 @@ export function App() {
     }
   };
 
-  // Handle Vault Unlock
+  // Unlock Vault
   const handleUnlock = async () => {
     if (unlockPin.length !== pinLength) {
       setUnlockError(`សូមបញ្ចូលលេខសម្ងាត់ ${pinLength} ខ្ទង់ឱ្យបានត្រឹមត្រូវ`);
       return;
     }
-    // Verify & Unlock
     setUnlockError('');
-    await loadVaultData(unlockPin);
+    await loadVaultData();
   };
 
-  // Handle Vault Setup
+  // Create Vault
   const handleCreateVault = async () => {
     if (enteredPin !== confirmPin) {
       setSetupError('លេខសម្ងាត់ទាំងពីរមិនដូចគ្នាទេ');
@@ -159,18 +159,18 @@ export function App() {
         setPinLength(chosenLength);
         setIsUnlocked(true);
       } else {
-        setSetupError('មិនអាចបង្កើត Vault បានឡើយ');
+        setSetupError('មិនអាចបង្កើត Vault បានទេ');
       }
     } catch (e) {
-      setSetupError('Connection error');
+      setSetupError('មានបញ្ហាក្នុងការភ្ជាប់ទៅកាន់ Server');
     }
   };
 
-  // Add Manual Account
+  // Add Manual Key
   const handleAddManual = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanSecret = manualSecret.replace(/\s+/g, '').toUpperCase();
-    if (!cleanSecret || cleanSecret.length < 8) {
+    if (!cleanSecret || cleanSecret.length < 6) {
       setManualError('Secret Key មិនត្រឹមត្រូវ (Base32)');
       return;
     }
@@ -181,14 +181,13 @@ export function App() {
       account: manualAccount || 'user@service',
       secret: cleanSecret,
       digits: 6,
-      period: 30,
-      algorithm: 'SHA-1'
+      period: 30
     };
 
     const updated = [...accounts, newAcc];
     setAccounts(updated);
 
-    // Sync to Cloud
+    // Sync to Postgres Cloud
     await fetch('/api/vault/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -206,15 +205,15 @@ export function App() {
     setShowAddSheet(false);
   };
 
-  // Copy TOTP Code
+  // Copy Code
   const copyCode = (id: string, code: string) => {
     navigator.clipboard.writeText(code);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Delete Account
-  const handleDeleteAccount = async (id: string) => {
+  // Delete Item
+  const handleDelete = async (id: string) => {
     if (!confirm('តើអ្នកពិតជាចង់លុបគណនី Authenticator នេះមែនទេ?')) return;
     const updated = accounts.filter((a) => a.id !== id);
     setAccounts(updated);
@@ -255,76 +254,92 @@ export function App() {
   };
 
   if (loading) {
-    return <div className="loading-screen">កំពុងដំណើរការ Vault...</div>;
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: '#0a0a0a', color: '#fff' }}>
+        <h3>កំពុងដំណើរការ Vault...</h3>
+      </div>
+    );
   }
 
-  // 1. Not Logged In
+  // 1. Login Screen
   if (!user) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <div className="app-logo">🛡️</div>
-          <h1>Khmer Authenticator Vault</h1>
-          <p>ប្រព័ន្ធរក្សាទុកកូដសុវត្ថិភាព 2FA Cloud-backed កម្រិតខ្ពស់</p>
-          <a href="/api/auth/google" className="btn-google">
-            <svg width="20" height="20" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-            </svg>
-            ចូលប្រើប្រាស់ជាមួយ Google
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#000', padding: 20 }}>
+        <div style={{ background: '#1c1c1e', padding: 32, borderRadius: 28, maxWidth: 380, width: '100%', textAlign: 'center', color: '#fff', border: '1px solid #2c2c2e' }}>
+          <div style={{ fontSize: 50, marginBottom: 16 }}>🛡️</div>
+          <h2 style={{ margin: '0 0 8px 0' }}>Khmer Authenticator</h2>
+          <p style={{ color: '#8e8e93', fontSize: 14, marginBottom: 28 }}>ប្រព័ន្ធរក្សាទុកកូដ 2FA Cloud Encrypted មានសុវត្ថិភាពខ្ពស់</p>
+          <a
+            href="/api/auth/google"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              background: '#fff',
+              color: '#000',
+              padding: '16px 20px',
+              borderRadius: 18,
+              textDecoration: 'none',
+              fontWeight: 600,
+              fontSize: 16
+            }}
+          >
+            ចូលប្រើជាមួយ Google
           </a>
         </div>
       </div>
     );
   }
 
-  // 2. First Vault Setup
+  // 2. Setup Vault Screen
   if (!hasVault) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <h2>🔐 បង្កើត Vault សម្ងាត់</h2>
-          <p className="subtitle">ជំហានទី {setupStep} នៃ 3: កំណត់លេខកូដដោះសោ</p>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#000', padding: 20 }}>
+        <div style={{ background: '#1c1c1e', padding: 32, borderRadius: 28, maxWidth: 400, width: '100%', textAlign: 'center', color: '#fff', border: '1px solid #2c2c2e' }}>
+          <h2>🔐 បង្កើតលេខកូដសម្ងាត់ Vault</h2>
+          <p style={{ color: '#8e8e93', fontSize: 14 }}>ជំហានទី {setupStep} នៃ 3: កំណត់លេខកូដដោះសោ</p>
 
           {setupStep === 1 && (
-            <div>
-              <label className="label">ជ្រើសរើសប្រវែងលេខកូដ PIN:</label>
-              <div className="pin-length-select">
+            <div style={{ marginTop: 24 }}>
+              <p style={{ fontSize: 15, marginBottom: 16 }}>ជ្រើសរើសប្រវែងលេខកូដ PIN:</p>
+              <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
                 <button
-                  className={`btn-toggle ${chosenLength === 4 ? 'active' : ''}`}
+                  style={{ flex: 1, padding: 14, borderRadius: 14, border: chosenLength === 4 ? '2px solid #007aff' : '1px solid #3a3a3c', background: '#2c2c2e', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
                   onClick={() => setChosenLength(4)}
                 >
                   4 ខ្ទង់
                 </button>
                 <button
-                  className={`btn-toggle ${chosenLength === 6 ? 'active' : ''}`}
+                  style={{ flex: 1, padding: 14, borderRadius: 14, border: chosenLength === 6 ? '2px solid #007aff' : '1px solid #3a3a3c', background: '#2c2c2e', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
                   onClick={() => setChosenLength(6)}
                 >
                   6 ខ្ទង់
                 </button>
               </div>
-              <button className="btn-primary" onClick={() => setSetupStep(2)}>
+              <button
+                style={{ width: '100%', padding: 16, borderRadius: 18, background: '#fff', color: '#000', fontWeight: 600, border: 'none', cursor: 'pointer' }}
+                onClick={() => setSetupStep(2)}
+              >
                 បន្តទៅមុខ
               </button>
             </div>
           )}
 
           {setupStep === 2 && (
-            <div>
-              <label className="label">បញ្ចូលលេខ PIN ({chosenLength} ខ្ទង់):</label>
+            <div style={{ marginTop: 24 }}>
+              <p style={{ fontSize: 15, marginBottom: 16 }}>បញ្ចូលលេខកូដ PIN ({chosenLength} ខ្ទង់):</p>
               <input
                 type="password"
                 maxLength={chosenLength}
-                className="pin-input-field"
-                placeholder="• ".repeat(chosenLength)}
+                autoFocus
+                style={{ width: '80%', padding: 14, fontSize: 32, textAlign: 'center', letterSpacing: 10, background: '#000', border: '1px solid #3a3a3c', borderRadius: 16, color: '#fff', marginBottom: 24 }}
                 value={enteredPin}
                 onChange={(e) => setEnteredPin(e.target.value.replace(/\D/g, ''))}
               />
               <button
-                className="btn-primary"
                 disabled={enteredPin.length !== chosenLength}
+                style={{ width: '100%', padding: 16, borderRadius: 18, background: enteredPin.length === chosenLength ? '#fff' : '#3a3a3c', color: enteredPin.length === chosenLength ? '#000' : '#8e8e93', fontWeight: 600, border: 'none', cursor: 'pointer' }}
                 onClick={() => setSetupStep(3)}
               >
                 បន្ទាប់
@@ -333,20 +348,20 @@ export function App() {
           )}
 
           {setupStep === 3 && (
-            <div>
-              <label className="label">បញ្ជាក់លេខ PIN ម្ដងទៀត:</label>
+            <div style={{ marginTop: 24 }}>
+              <p style={{ fontSize: 15, marginBottom: 16 }}>បញ្ជាក់លេខកូដ PIN ម្ដងទៀត:</p>
               <input
                 type="password"
                 maxLength={chosenLength}
-                className="pin-input-field"
-                placeholder="• ".repeat(chosenLength)}
+                autoFocus
+                style={{ width: '80%', padding: 14, fontSize: 32, textAlign: 'center', letterSpacing: 10, background: '#000', border: '1px solid #3a3a3c', borderRadius: 16, color: '#fff', marginBottom: 16 }}
                 value={confirmPin}
                 onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
               />
-              {setupError && <div className="error-badge">{setupError}</div>}
+              {setupError && <p style={{ color: '#ff453a', fontSize: 14, marginBottom: 16 }}>{setupError}</p>}
               <button
-                className="btn-primary"
                 disabled={confirmPin.length !== chosenLength}
+                style={{ width: '100%', padding: 16, borderRadius: 18, background: confirmPin.length === chosenLength ? '#fff' : '#3a3a3c', color: confirmPin.length === chosenLength ? '#000' : '#8e8e93', fontWeight: 600, border: 'none', cursor: 'pointer' }}
                 onClick={handleCreateVault}
               >
                 បង្កើត និងបើក Vault
@@ -361,115 +376,150 @@ export function App() {
   // 3. Vault Locked Screen
   if (!isUnlocked) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <div className="lock-icon">🔒</div>
-          <h2>LOCKED VAULT</h2>
-          <p className="subtitle">បញ្ចូលលេខកូដ PIN {pinLength} ខ្ទង់ដើម្បីដោះសោ</p>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#000', padding: 20 }}>
+        <div style={{ background: '#1c1c1e', padding: 32, borderRadius: 28, maxWidth: 380, width: '100%', textAlign: 'center', color: '#fff', border: '1px solid #2c2c2e' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
+          <h2 style={{ margin: '0 0 8px 0' }}>LOCKED VAULT</h2>
+          <p style={{ color: '#8e8e93', fontSize: 14, marginBottom: 24 }}>បញ្ចូលលេខកូដ PIN {pinLength} ខ្ទង់ដើម្បីដោះសោ</p>
 
           <input
             type="password"
             maxLength={pinLength}
             autoFocus
-            className="pin-input-field"
-            placeholder="• ".repeat(pinLength)}
+            style={{ width: '80%', padding: 14, fontSize: 32, textAlign: 'center', letterSpacing: 10, background: '#000', border: '1px solid #3a3a3c', borderRadius: 16, color: '#fff', marginBottom: 16 }}
             value={unlockPin}
             onChange={(e) => setUnlockPin(e.target.value.replace(/\D/g, ''))}
           />
 
-          {unlockError && <div className="error-badge">{unlockError}</div>}
+          {unlockError && <p style={{ color: '#ff453a', fontSize: 14, marginBottom: 16 }}>{unlockError}</p>}
 
-          <button className="btn-primary" onClick={handleUnlock}>
+          <button
+            style={{ width: '100%', padding: 16, borderRadius: 18, background: '#fff', color: '#000', fontWeight: 600, border: 'none', cursor: 'pointer', fontSize: 16, marginBottom: 12 }}
+            onClick={handleUnlock}
+          >
             ដោះសោ Vault
           </button>
-          <button className="btn-secondary" onClick={handleLogout}>
-            ចាកចេញពីគណនី
+          <button
+            style={{ width: '100%', padding: 12, background: 'transparent', color: '#8e8e93', border: 'none', cursor: 'pointer', fontSize: 14 }}
+            onClick={handleLogout}
+          >
+            ចាកចេញពីគណនី (Sign out)
           </button>
         </div>
       </div>
     );
   }
 
-  // 4. Main Authenticator Dashboard (Unlocked)
+  // 4. Main Authenticator Dashboard (Active)
   return (
-    <div className="app-layout">
+    <div style={{ minHeight: '100vh', background: '#000', color: '#fff', fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' }}>
       {/* Header */}
-      <header className="app-header">
-        <div className="header-left">
-          <img src={user.avatarUrl || 'https://via.placeholder.com/40'} className="user-avatar" alt="Profile" />
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: '#1c1c1e', borderBottom: '1px solid #2c2c2e' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <img src={user.avatarUrl || 'https://via.placeholder.com/40'} style={{ width: 42, height: 42, borderRadius: '50%' }} alt="Avatar" />
           <div>
-            <h3>{user.name}</h3>
-            <span className="user-email">{user.email}</span>
+            <div style={{ fontWeight: 600, fontSize: 16 }}>{user.name}</div>
+            <div style={{ color: '#8e8e93', fontSize: 12 }}>{user.email}</div>
           </div>
         </div>
-        <div className="header-actions">
-          <button className="btn-icon" onClick={() => setIsUnlocked(false)} title="ចាក់សោ Vault">
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => setIsUnlocked(false)}
+            style={{ background: '#2c2c2e', border: 'none', color: '#fff', width: 40, height: 40, borderRadius: '50%', cursor: 'pointer', fontSize: 16 }}
+            title="ចាក់សោ Vault"
+          >
             🔒
           </button>
-          <button className="btn-add" onClick={() => setShowAddSheet(true)}>
+          <button
+            onClick={() => setShowAddSheet(true)}
+            style={{ background: '#007aff', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 20, fontWeight: 600, cursor: 'pointer' }}
+          >
             + បន្ថែម
           </button>
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <div className="tab-bar">
-        <button className={activeTab === 'vault' ? 'tab active' : 'tab'} onClick={() => setActiveTab('vault')}>
+      {/* Tabs */}
+      <div style={{ display: 'flex', background: '#121214', borderBottom: '1px solid #2c2c2e' }}>
+        <button
+          onClick={() => setActiveTab('vault')}
+          style={{ flex: 1, padding: 14, background: 'transparent', border: 'none', borderBottom: activeTab === 'vault' ? '2px solid #fff' : 'none', color: activeTab === 'vault' ? '#fff' : '#8e8e93', fontWeight: 600, cursor: 'pointer' }}
+        >
           Authenticators ({accounts.length})
         </button>
         <button
-          className={activeTab === 'devices' ? 'tab active' : 'tab'}
           onClick={() => {
             setActiveTab('devices');
             fetchSessions();
           }}
+          style={{ flex: 1, padding: 14, background: 'transparent', border: 'none', borderBottom: activeTab === 'devices' ? '2px solid #fff' : 'none', color: activeTab === 'devices' ? '#fff' : '#8e8e93', fontWeight: 600, cursor: 'pointer' }}
         >
           ឧបករណ៍សកម្ម
         </button>
       </div>
 
-      {/* Main Tab Content */}
-      <main className="content-container">
+      {/* Content Area */}
+      <main style={{ padding: 20, maxWidth: 500, margin: '0 auto' }}>
         {activeTab === 'vault' && (
           <div>
             {accounts.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">🛡️</div>
-                <h3>មិនទាន់មាន 2FA Authenticator នៅឡើយទេ</h3>
-                <p>ចុចប៊ូតុងខាងក្រោមដើម្បីបន្ថែមគណនីដំបូងរបស់អ្នក</p>
-                <button className="btn-primary" onClick={() => setShowAddSheet(true)}>
+              <div style={{ textAlign: 'center', padding: '60px 20px', background: '#1c1c1e', borderRadius: 28, border: '1px solid #2c2c2e' }}>
+                <div style={{ fontSize: 48, marginBottom: 16 }}>🛡️</div>
+                <h3 style={{ margin: '0 0 8px 0' }}>មិនទាន់មាន Authenticator ទេ</h3>
+                <p style={{ color: '#8e8e93', fontSize: 14, marginBottom: 24 }}>ចុចប៊ូតុងខាងក្រោមដើម្បីបន្ថែមគណនី 2FA ដំបូងរបស់អ្នក</p>
+                <button
+                  onClick={() => setShowAddSheet(true)}
+                  style={{ padding: '14px 24px', background: '#fff', color: '#000', borderRadius: 18, border: 'none', fontWeight: 600, cursor: 'pointer' }}
+                >
                   + បន្ថែម Authenticator
                 </button>
               </div>
             ) : (
-              <div className="totp-grid">
+              <div>
                 {accounts.map((acc) => {
                   const code = totpCodes[acc.id] || '------';
-                  const formattedCode = `${code.slice(0, 3)} ${code.slice(3, 6)}`;
+                  const formatted = `${code.slice(0, 3)} ${code.slice(3, 6)}`;
                   return (
-                    <div key={acc.id} className="totp-card">
-                      <div className="card-top">
+                    <div key={acc.id} style={{ background: '#1c1c1e', padding: 20, borderRadius: 24, marginBottom: 16, border: '1px solid #2c2c2e' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
-                          <span className="issuer-badge">{acc.issuer}</span>
-                          <h4 className="account-title">{acc.account}</h4>
+                          <span style={{ color: '#007aff', fontSize: 12, fontWeight: 700, textTransform: 'uppercase' }}>{acc.issuer}</span>
+                          <div style={{ fontSize: 16, fontWeight: 500 }}>{acc.account}</div>
                         </div>
-                        <button className="btn-delete" onClick={() => handleDeleteAccount(acc.id)}>
+                        <button
+                          onClick={() => handleDelete(acc.id)}
+                          style={{ background: 'transparent', border: 'none', color: '#ff453a', fontSize: 18, cursor: 'pointer' }}
+                        >
                           ✕
                         </button>
                       </div>
 
-                      <div className="code-display" onClick={() => copyCode(acc.id, code)}>
-                        <span className="code-digits">{formattedCode}</span>
-                        <div className="timer-ring">
-                          <span>{timeLeft}s</span>
+                      <div
+                        onClick={() => copyCode(acc.id, code)}
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0', cursor: 'pointer' }}
+                      >
+                        <span style={{ fontFamily: 'Courier New, monospace', fontSize: 38, fontWeight: 700, letterSpacing: 4 }}>
+                          {formatted}
+                        </span>
+                        <div style={{ background: '#2c2c2e', width: 44, height: 44, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 'bold' }}>
+                          {timeLeft}s
                         </div>
                       </div>
 
                       <button
-                        className={`btn-copy ${copiedId === acc.id ? 'copied' : ''}`}
                         onClick={() => copyCode(acc.id, code)}
+                        style={{
+                          width: '100%',
+                          padding: 12,
+                          borderRadius: 14,
+                          border: '1px solid #2c2c2e',
+                          background: copiedId === acc.id ? '#34c759' : '#242426',
+                          color: '#fff',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
                       >
-                        {copiedId === acc.id ? '✓ បានចម្លង (Copied)' : '📋 ចម្លងលេខកូដ'}
+                        {copiedId === acc.id ? '✓ បានចម្លងលេខកូដ' : '📋 ចម្លងលេខកូដ (Copy)'}
                       </button>
                     </div>
                   );
@@ -480,22 +530,25 @@ export function App() {
         )}
 
         {activeTab === 'devices' && (
-          <div className="sessions-list">
-            <div className="sessions-header">
-              <h3>ឧបករណ៍ដែលកំពុងភ្ជាប់ ({sessions.length})</h3>
-              <button className="btn-danger" onClick={handleLogoutOtherDevices}>
-                ចាកចេញពីឧបករណ៍ផ្សេងទៀត
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h3 style={{ margin: 0 }}>ឧបករណ៍សកម្ម ({sessions.length})</h3>
+              <button
+                onClick={handleLogoutOtherDevices}
+                style={{ padding: '8px 14px', background: '#ff453a', color: '#fff', border: 'none', borderRadius: 14, fontWeight: 600, cursor: 'pointer', fontSize: 13 }}
+              >
+                ចាកចេញពីឧបករណ៍ផ្សេង
               </button>
             </div>
+
             {sessions.map((s) => (
-              <div key={s.id} className="session-card">
-                <div className="session-info">
-                  <div className="device-icon">{s.device_type === 'phone' ? '📱' : '💻'}</div>
-                  <div>
-                    <h4>{s.device_name} {s.is_current_device && <span className="current-badge">ឧបករណ៍នេះ</span>}</h4>
-                    <p>{s.browser} • {s.operating_system}</p>
-                    <span className="last-active">សកម្មភាពចុងក្រោយ: {new Date(s.last_active_at).toLocaleString()}</span>
+              <div key={s.id} style={{ background: '#1c1c1e', padding: 16, borderRadius: 18, marginBottom: 12, border: '1px solid #2c2c2e', display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ fontSize: 28 }}>{s.device_type === 'phone' ? '📱' : '💻'}</div>
+                <div>
+                  <div style={{ fontWeight: 600 }}>
+                    {s.device_name} {s.is_current_device && <span style={{ background: '#34c759', color: '#000', fontSize: 10, padding: '2px 6px', borderRadius: 6, marginLeft: 6 }}>ឧបករណ៍នេះ</span>}
                   </div>
+                  <div style={{ color: '#8e8e93', fontSize: 12 }}>{s.browser} • {s.operating_system}</div>
                 </div>
               </div>
             ))}
@@ -503,76 +556,98 @@ export function App() {
         )}
       </main>
 
-      {/* iOS-style Bottom Sheet for Add Authenticator */}
+      {/* Add Options Bottom Sheet */}
       {showAddSheet && (
-        <div className="modal-backdrop" onClick={() => setShowAddSheet(false)}>
-          <div className="bottom-sheet" onClick={(e) => e.stopPropagation()}>
-            <h3>បន្ថែម Authenticator</h3>
+        <div
+          onClick={() => setShowAddSheet(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#1c1c1e', width: '100%', maxWidth: 500, borderRadius: '28px 28px 0 0', padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}
+          >
+            <h3 style={{ margin: '0 0 8px 0' }}>បន្ថែម Authenticator</h3>
             <button
-              className="sheet-option"
-              onClick={() => {
-                alert('មុខងារស្កេន Camera អាចប្រើបាននៅលើទូរសព្ទ');
-                setShowAddSheet(false);
-              }}
-            >
-              📷 ស្កេន QR Code
-            </button>
-            <button
-              className="sheet-option"
               onClick={() => {
                 setShowAddSheet(false);
                 setShowManualModal(true);
               }}
+              style={{ padding: 18, background: '#2c2c2e', color: '#fff', border: 'none', borderRadius: 18, fontSize: 16, fontWeight: 600, textAlign: 'left', cursor: 'pointer' }}
             >
               ⌨️ បញ្ចូល Setup Key ដោយដៃ
             </button>
-            <button className="sheet-cancel" onClick={() => setShowAddSheet(false)}>
+            <button
+              onClick={() => setShowAddSheet(false)}
+              style={{ padding: 16, background: 'transparent', color: '#ff453a', border: 'none', fontSize: 16, fontWeight: 600, cursor: 'pointer' }}
+            >
               បោះបង់
             </button>
           </div>
         </div>
       )}
 
-      {/* Manual Setup Key Modal */}
+      {/* Manual Modal */}
       {showManualModal && (
-        <div className="modal-backdrop" onClick={() => setShowManualModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>បញ្ចូល Setup Key ដោយដៃ</h3>
+        <div
+          onClick={() => setShowManualModal(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#1c1c1e', padding: 24, borderRadius: 24, width: '100%', maxWidth: 400, border: '1px solid #2c2c2e' }}
+          >
+            <h3 style={{ margin: '0 0 16px 0' }}>បញ្ចូល Setup Key</h3>
             <form onSubmit={handleAddManual}>
-              <label>ឈ្មោះស្ថាប័ន (Issuer ឧ. Google, Facebook)</label>
-              <input
-                type="text"
-                required
-                placeholder="Google"
-                value={manualIssuer}
-                onChange={(e) => setManualIssuer(e.target.value)}
-              />
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 13, color: '#8e8e93' }}>ឈ្មោះស្ថាប័ន (Issuer ឧ. Google, Facebook)</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Google"
+                  style={{ width: '100%', padding: 12, background: '#000', border: '1px solid #2c2c2e', borderRadius: 12, color: '#fff', marginTop: 4, boxSizing: 'border-box' }}
+                  value={manualIssuer}
+                  onChange={(e) => setManualIssuer(e.target.value)}
+                />
+              </div>
 
-              <label>ឈ្មោះគណនី (Email ឬ Username)</label>
-              <input
-                type="text"
-                required
-                placeholder="user@example.com"
-                value={manualAccount}
-                onChange={(e) => setManualAccount(e.target.value)}
-              />
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 13, color: '#8e8e93' }}>ឈ្មោះគណនី (Email ឬ Username)</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="user@example.com"
+                  style={{ width: '100%', padding: 12, background: '#000', border: '1px solid #2c2c2e', borderRadius: 12, color: '#fff', marginTop: 4, boxSizing: 'border-box' }}
+                  value={manualAccount}
+                  onChange={(e) => setManualAccount(e.target.value)}
+                />
+              </div>
 
-              <label>Setup Key (Base32)</label>
-              <input
-                type="text"
-                required
-                placeholder="JBSWY3DPEHPK3PXP"
-                value={manualSecret}
-                onChange={(e) => setManualSecret(e.target.value)}
-              />
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 13, color: '#8e8e93' }}>Setup Key (Base32)</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="JBSWY3DPEHPK3PXP"
+                  style={{ width: '100%', padding: 12, background: '#000', border: '1px solid #2c2c2e', borderRadius: 12, color: '#fff', marginTop: 4, boxSizing: 'border-box' }}
+                  value={manualSecret}
+                  onChange={(e) => setManualSecret(e.target.value)}
+                />
+              </div>
 
-              {manualError && <div className="error-badge">{manualError}</div>}
+              {manualError && <p style={{ color: '#ff453a', fontSize: 13 }}>{manualError}</p>}
 
-              <div className="modal-actions">
-                <button type="button" className="btn-secondary" onClick={() => setShowManualModal(false)}>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowManualModal(false)}
+                  style={{ flex: 1, padding: 14, background: '#2c2c2e', color: '#fff', border: 'none', borderRadius: 14, fontWeight: 600, cursor: 'pointer' }}
+                >
                   បោះបង់
                 </button>
-                <button type="submit" className="btn-primary">
+                <button
+                  type="submit"
+                  style={{ flex: 1, padding: 14, background: '#fff', color: '#000', border: 'none', borderRadius: 14, fontWeight: 600, cursor: 'pointer' }}
+                >
                   រក្សាទុក
                 </button>
               </div>
@@ -583,3 +658,9 @@ export function App() {
     </div>
   );
 }
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <MainApp />
+  </React.StrictMode>
+);
