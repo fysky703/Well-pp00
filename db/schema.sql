@@ -50,3 +50,24 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON user_sessions(session_token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON user_sessions(user_id) WHERE revoked_at IS NULL;
+CREATE TABLE IF NOT EXISTS gmail_accounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    email TEXT NOT NULL,
+
+    access_token TEXT,
+
+    refresh_token TEXT,
+
+    token_expiry TIMESTAMP,
+
+    created_at TIMESTAMP DEFAULT NOW(),
+
+    updated_at TIMESTAMP DEFAULT NOW(),
+
+    UNIQUE(user_id, email)
+);
