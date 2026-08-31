@@ -138,10 +138,13 @@ app.get('/api/health', async (_req: Request, res: Response) => {
 app.get('/api/auth/google', (_req: Request, res: Response) => {
   const url = googleClient.generateAuthUrl({
     access_type: 'offline',
-    scope: [
-      'https://www.googleapis.com/auth/userinfo.profile',
-      'https://www.googleapis.com/auth/userinfo.email'
-    ],
+   scope: [
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/userinfo.email',
+
+  // Gmail Inbox - Read only
+  'https://www.googleapis.com/auth/gmail.readonly'
+],
     prompt: 'consent'
   });
   res.redirect(url);
@@ -412,9 +415,9 @@ app.post('/api/auth/logout', requireAuth, async (req: AuthRequest, res: Response
     res.status(500).json({ error: 'Logout failed' });
   }
 });
-// បន្ថែមនៅខាងក្រោម app.get('/api/me', ...)
+// áááááááááá¶áááááá app.get('/api/me', ...)
 
-// គាំទ្រទាំង 2 ទម្រង់ URL
+// áá¶áááááá¶áá 2 áááááá URL
 app.get('/api/auth/me', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const vaultRes = await pool.query(
